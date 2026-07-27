@@ -1,0 +1,21 @@
+{
+  "name": "getit-control-centre",
+  "version": "0.1.9",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "vercel-build": "next build"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.110.8",
+    "next": "16.2.11",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "leaflet": "1.9.4"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}
