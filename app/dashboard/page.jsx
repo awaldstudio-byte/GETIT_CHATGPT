@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import CatalogueManager from "../components/CatalogueManager";
 import DriverBoard from "../components/DriverBoard";
 import FocusStrip from "../components/FocusStrip";
 import OperationsMap from "../components/OperationsMap";
@@ -243,6 +244,8 @@ export default function DashboardPage() {
         <PaymentQueue {...childProps} />
       ) : activeTab === "map" ? (
         <OperationsMap {...childProps} />
+      ) : activeTab === "catalogue" ? (
+        <CatalogueManager onError={handleError} onToast={showToast} />
       ) : (
         <SupportQueue {...childProps} />
       )}
