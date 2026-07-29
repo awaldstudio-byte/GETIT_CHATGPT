@@ -42,6 +42,22 @@ const safeFileName = (name) =>
     .replace(/-+/g, "-")
     .slice(0, 120);
 
+const catalogueSearchText = (row) =>
+  [
+    row.shop_name,
+    row.product_name,
+    row.brand,
+    row.size,
+    row.category,
+    ...(row.search_aliases || []),
+    row.product_barcode,
+    row.barcode,
+    row.shop_sku,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
 const statusCopy = {
   draft: "Awaiting extraction",
   imported: "Awaiting review",
@@ -124,6 +140,9 @@ export default function CatalogueManager({ onError, onToast }) {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchShopId, setSearchShopId] = useState("all");
   const [manual, setManual] = useState({
     productName: "",
     brand: "",
@@ -153,6 +172,14 @@ export default function CatalogueManager({ onError, onToast }) {
 
   useEffect(() => {
     loadWorkspace();
+  }, []);
+
+  useEffect(() => {
+    const pendingSearch = window.sessionStorage.getItem("getit.catalogue.search");
+    if (!pendingSearch) return;
+    window.sessionStorage.removeItem("getit.catalogue.search");
+    setSearchDraft(pendingSearch);
+    setSearchQuery(pendingSearch.trim());
   }, []);
 
   useEffect(() => {
@@ -223,6 +250,31 @@ export default function CatalogueManager({ onError, onToast }) {
     }
     return [...grouped.values()];
   }, [workspace.liveRows]);
+
+  const searchResults = useMemo(() => {
+    const tokens = searchQuery
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    if (!tokens.length) return [];
+
+    return workspace.liveRows
+      .filter((row) => searchShopId === "all" || row.shop_id === searchShopId)
+      .filter((row) => {
+        const haystack = catalogueSearchText(row);
+        return tokens.every((token) => haystack.includes(token));
+      })
+      .sort((left, right) => {
+        if (Boolean(left.in_stock) !== Boolean(right.in_stock)) return left.in_stock ? -1 : 1;
+        const leftPrice = Number(left.effective_price);
+        const rightPrice = Number(right.effective_price);
+        if (Number.isFinite(leftPrice) && Number.isFinite(rightPrice) && leftPrice !== rightPrice) {
+          return leftPrice - rightPrice;
+        }
+        return String(left.shop_name).localeCompare(String(right.shop_name));
+      });
+  }, [workspace.liveRows, searchQuery, searchShopId]);
 
   const pendingRows = workspace.queue.reduce(
     (total, batch) =>
@@ -403,6 +455,17 @@ export default function CatalogueManager({ onError, onToast }) {
     }
   };
 
+  const submitPriceSearch = (event) => {
+    event.preventDefault();
+    setSearchQuery(searchDraft.trim());
+  };
+
+  const clearPriceSearch = () => {
+    setSearchDraft("");
+    setSearchQuery("");
+    setSearchShopId("all");
+  };
+
   if (loading) return <div className="app-loading">Opening the catalogue workspace…</div>;
 
   return (
@@ -439,6 +502,85 @@ export default function CatalogueManager({ onError, onToast }) {
         <strong>Flyer rule:</strong> regional flyer specials may be shown while comparison is pending,
         but the final price and stock are confirmed before payment.
       </div>
+
+      <section className={`panel ${styles.priceFinder}`}>
+        <div className={styles.priceFinderHeading}>
+          <div>
+            <p className="eyebrow">QUICK PRICE CHECK</p>
+            <h2>Find a product in any shop</h2>
+            <span>Search by product, brand, size, category or barcode and compare prices across Villiers shops.</span>
+          </div>
+          {searchQuery && (
+            <button type="button" className="small-button" onClick={clearPriceSearch}>
+              Clear
+            </button>
+          )}
+        </div>
+
+        <form className={styles.searchForm} onSubmit={submitPriceSearch}>
+          <label className={styles.searchField}>
+            Product search
+            <input
+              autoFocus
+              type="search"
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Example: tomato sauce 700 ml"
+            />
+          </label>
+          <label>
+            Shop
+            <select value={searchShopId} onChange={(event) => setSearchShopId(event.target.value)}>
+              <option value="all">All shops</option>
+              {workspace.shops.map((shop) => (
+                <option value={shop.id} key={shop.id}>{shop.name}</option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className="primary-button">Search catalogue</button>
+        </form>
+
+        {searchQuery && (
+          <div className={styles.searchResults}>
+            <div className={styles.searchSummary}>
+              <strong>{searchResults.length} {searchResults.length === 1 ? "match" : "matches"}</strong>
+              <span>for “{searchQuery}”</span>
+            </div>
+            {searchResults.length ? (
+              <div className={styles.searchGrid}>
+                {searchResults.map((row) => (
+                  <article key={`search-${row.shop_id}-${row.product_id}`}>
+                    <div className={styles.searchProduct}>
+                      <span>{row.shop_name}</span>
+                      <strong>{[row.brand, row.product_name, row.size].filter(Boolean).join(" ")}</strong>
+                      <small>{row.category}</small>
+                    </div>
+                    <div className={styles.searchPrice}>
+                      <strong>{formatMoney(row.effective_price)}</strong>
+                      <span>{row.current_special_price != null ? `Special until ${formatDate(row.current_special_ends)}` : "Current normal price"}</span>
+                    </div>
+                    <div className={styles.searchChecks}>
+                      <span className={row.in_stock ? styles.available : styles.unavailable}>
+                        {row.in_stock ? "Listed available" : "Listed unavailable"}
+                      </span>
+                      <small>
+                        {row.local_verification_status === "verified"
+                          ? "Villiers verified"
+                          : "Check shelf price before payment"}
+                      </small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className={styles.searchEmpty}>
+                <strong>No catalogue price found.</strong>
+                <span>Keep the item as PRICE PENDING and check the current flyer or shelf price. The order can still continue.</span>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       <section className={styles.layout}>
         <aside className={`panel ${styles.sourceList}`}>

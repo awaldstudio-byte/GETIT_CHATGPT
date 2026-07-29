@@ -8,6 +8,29 @@
 .stats span { display: block; color: var(--muted); font-size: 12px; font-weight: 800; }
 .stats strong { display: block; margin-top: 7px; color: var(--navy); font-size: 24px; }
 .trustNote { margin-bottom: 16px; padding: 13px 15px; border: 1px solid #f0d18f; border-radius: 13px; background: #fff8e7; color: #72510f; line-height: 1.45; }
+.priceFinder { margin-bottom: 16px; padding: 20px; }
+.priceFinderHeading { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+.priceFinderHeading h2 { margin: 3px 0 5px; }
+.priceFinderHeading > div > span { color: var(--muted); font-size: 12px; }
+.searchForm { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(180px, .35fr) auto; gap: 10px; align-items: end; margin-top: 16px; }
+.searchForm label { gap: 6px; }
+.searchForm button { min-height: 42px; }
+.searchField input { font-size: 15px; }
+.searchResults { margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }
+.searchSummary { display: flex; align-items: baseline; gap: 6px; margin-bottom: 10px; }
+.searchSummary span { color: var(--muted); font-size: 12px; }
+.searchGrid { display: grid; gap: 8px; }
+.searchGrid article { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(150px, .45fr) minmax(150px, .45fr); gap: 16px; align-items: center; padding: 13px 14px; border: 1px solid #dfe7ef; border-radius: 13px; background: #fbfdff; }
+.searchProduct, .searchPrice, .searchChecks { display: grid; gap: 4px; }
+.searchProduct > span { color: var(--blue-deep); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
+.searchProduct small, .searchPrice span, .searchChecks small { color: var(--muted); font-size: 11px; }
+.searchPrice strong { color: #08734e; font-size: 19px; }
+.searchChecks { justify-items: start; }
+.searchChecks > span { padding: 5px 8px; border-radius: 999px; font-size: 10px; font-weight: 900; }
+.available { color: #166534; background: #dcfce7; }
+.unavailable { color: #991b1b; background: #fee2e2; }
+.searchEmpty { display: grid; gap: 5px; padding: 20px; border: 1px dashed #bdcbd8; border-radius: 13px; background: #fbfcfe; color: var(--muted); text-align: center; }
+.searchEmpty strong { color: var(--ink); }
 .layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 16px; align-items: start; }
 .sourceList, .detail, .livePanel { padding: 20px; }
 .sourceList { display: grid; gap: 10px; max-height: 760px; overflow: auto; }
@@ -72,6 +95,8 @@
   .headingActions { align-items: stretch; flex-direction: column; }
   .headingActions > * { justify-content: center; text-align: center; }
   .sourceSummary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .priceFinderHeading { flex-direction: column; }
+  .searchForm, .searchGrid article { grid-template-columns: 1fr; }
   .itemRow { grid-template-columns: 1fr; }
   .liveGrid article { grid-template-columns: 1fr; }
 }

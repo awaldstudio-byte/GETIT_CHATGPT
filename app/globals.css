@@ -708,9 +708,11 @@ textarea { min-height: 84px; resize: vertical; }
 .review-product span, .line-total span { color: var(--muted); font-size: 12px; }
 .price-input span { display: flex; align-items: center; gap: 7px; }
 .price-input input { padding: 8px 9px; }
+.review-line-actions { display: grid; gap: 6px; }
 .fee-summary { margin: 18px 0; margin-left: auto; width: min(430px, 100%); display: grid; gap: 8px; }
 .fee-summary > div { display: flex; justify-content: space-between; gap: 20px; }
 .fee-summary .grand-total { padding-top: 12px; margin-top: 6px; border-top: 2px solid #dbe4ee; font-size: 18px; }
+.fee-policy-note { color: var(--muted); font-size: 11px; line-height: 1.4; text-align: right; }
 .review-note { margin-top: 15px; }
 .review-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .review-footer p { color: var(--muted); font-size: 12px; max-width: 500px; }
@@ -1379,7 +1381,7 @@ textarea { min-height: 84px; resize: vertical; }
   width: min(1500px, calc(100% - 34px));
   margin: 18px auto 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1423,6 +1425,23 @@ textarea { min-height: 84px; resize: vertical; }
 .connection-banner.offline { border-color: #efc3c6; background: #fff1f2; color: #8d2c34; }
 .connection-banner > div { display: grid; gap: 2px; }
 .connection-banner span { font-size: 12px; opacity: .86; }
+
+.system-health-banner {
+  width: min(1500px, calc(100% - 34px));
+  margin: 12px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 14px;
+  border: 1px solid #efc3c6;
+  border-radius: 13px;
+  background: #fff1f2;
+  color: #842c35;
+}
+
+.system-health-banner > div { display: grid; gap: 2px; }
+.system-health-banner span { font-size: 12px; line-height: 1.45; opacity: .88; }
 
 .driver-group-section { margin-bottom: 22px; }
 .driver-group-heading {

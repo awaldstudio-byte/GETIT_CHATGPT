@@ -20,6 +20,7 @@ const EMPTY_DATA = {
   orderPins: [],
   shopPins: [],
   openQueries: [],
+  health: null,
 };
 
 export default function DashboardPage() {
@@ -212,6 +213,24 @@ export default function DashboardPage() {
       />
 
       <FocusStrip data={data} activeTab={activeTab} onNavigate={setActiveTab} />
+
+      {data.health?.status === "attention" && (
+        <div className="system-health-banner">
+          <div>
+            <strong>Automation queue needs attention</strong>
+            <span>
+              {data.health.automation_backlog || 0} older updates are waiting
+              {data.health.stuck_processing
+                ? ` and ${data.health.stuck_processing} are stuck in processing`
+                : ""}.
+              Nothing has been retried automatically, so customer messages and payments stay protected.
+            </span>
+          </div>
+          <button type="button" className="small-button" onClick={refresh} disabled={refreshing || !browserOnline}>
+            {refreshing ? "Checking…" : "Check again"}
+          </button>
+        </div>
+      )}
 
       {connectionProblem && (
         <div className={`connection-banner ${browserOnline ? "warning" : "offline"}`}>
