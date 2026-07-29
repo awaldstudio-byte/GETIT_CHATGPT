@@ -139,6 +139,11 @@ export default function PaymentQueue({ data, api, onError, onToast, onNavigate }
     }
   };
 
+  const findCataloguePrice = (itemName) => {
+    window.sessionStorage.setItem('getit.catalogue.search', itemName);
+    onNavigate?.('catalogue');
+  };
+
   const customerPhone = detail?.order?.customer_phone;
   const customerMessage = detail?.order
     ? `Hi ${detail.order.customer_name || ''}, Getit is checking your order ${detail.order.order_number}.`
@@ -253,9 +258,14 @@ export default function PaymentQueue({ data, api, onError, onToast, onNavigate }
                         <span>Line total</span>
                         <strong>{money(currentPrice * line.quantity)}</strong>
                       </div>
-                      <button type="button" className="small-button" disabled={busy || !dirty} onClick={() => saveLine(line)}>
-                        {dirty ? 'Check price' : 'Checked ✓'}
-                      </button>
+                      <div className="review-line-actions">
+                        <button type="button" className="small-button" onClick={() => findCataloguePrice(line.item_name)}>
+                          Find price
+                        </button>
+                        <button type="button" className="small-button" disabled={busy || !dirty} onClick={() => saveLine(line)}>
+                          {dirty ? 'Check price' : 'Checked ✓'}
+                        </button>
+                      </div>
                     </article>
                   );
                 })}
@@ -264,12 +274,11 @@ export default function PaymentQueue({ data, api, onError, onToast, onNavigate }
               <div className="fee-summary">
                 <div><span>Goods</span><strong>{money(reviewedTotal)}</strong></div>
                 <div><span>Delivery</span><strong>{money(selectedQueue?.delivery_fee)}</strong></div>
-                <div><span>Second shop</span><strong>{money(selectedQueue?.second_shop_fee)}</strong></div>
-                <div><span>Priority</span><strong>{money(selectedQueue?.priority_fee)}</strong></div>
                 <div className="grand-total">
                   <span>Amount customer will pay</span>
-                  <strong>{money(reviewedTotal + Number(selectedQueue?.delivery_fee || 0) + Number(selectedQueue?.second_shop_fee || 0) + Number(selectedQueue?.priority_fee || 0))}</strong>
+                  <strong>{money(reviewedTotal + Number(selectedQueue?.delivery_fee || 0))}</strong>
                 </div>
+                <small className="fee-policy-note">Delivery already includes the order size and number of shops.</small>
               </div>
 
               <label className="review-note">

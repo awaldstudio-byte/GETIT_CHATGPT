@@ -25,7 +25,7 @@ export default function Topbar({
     ['operations', 'Drivers & orders', 0],
     ['payments', 'Payments', paymentCount],
     ['map', 'Map & locations', locationCount],
-    ['catalogue', 'Catalogue', 0],
+    ['catalogue', 'Find a price', 0],
     ['help', 'Needs help', helpCount],
   ];
 
