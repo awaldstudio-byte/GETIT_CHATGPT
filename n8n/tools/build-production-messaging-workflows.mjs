@@ -979,7 +979,36 @@ return [{ json: {
 } }];`;
 
 const restoreDecisionCode = String.raw`
-return [{ json: $('Route Draft Action').item.json }];`;
+const source = $('Route Draft Action').item.json;
+if (!source.submitDraft) return [{ json: source }];
+
+const rawSubmission = $('Submit Confirmed Draft').item.json;
+const submission = rawSubmission?.data && typeof rawSubmission.data === 'object'
+  ? rawSubmission.data
+  : rawSubmission;
+const orders = Array.isArray(submission?.orders) ? submission.orders : [];
+const orderNumbers = orders
+  .map((order) => String(order?.order_number || '').trim())
+  .filter(Boolean);
+
+if (!orderNumbers.length) {
+  return [{ json: {
+    ...source,
+    decision: 'human_review',
+    reasonCode: 'SUBMITTED_ORDER_NUMBER_MISSING',
+    responseBody: 'Your shopping request was submitted, but I could not safely read the order number. A staff member will check it before payment.',
+    submissionResult: submission,
+  } }];
+}
+
+const orderLabel = orderNumbers.length === 1
+  ? 'order ' + orderNumbers[0]
+  : 'orders ' + orderNumbers.join(', ');
+return [{ json: {
+  ...source,
+  responseBody: 'Thanks — ' + orderLabel + ' has been created and sent for staff price and availability review. We will confirm everything before payment.',
+  submissionResult: submission,
+} }];`;
 
 const classifyStatusCode = String.raw`
 const source = $('Normalize Meta Events').item.json;

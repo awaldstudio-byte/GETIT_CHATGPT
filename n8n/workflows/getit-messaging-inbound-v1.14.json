@@ -813,7 +813,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "\nreturn [{ json: $('Route Draft Action').item.json }];"
+        "jsCode": "\nconst source = $('Route Draft Action').item.json;\nif (!source.submitDraft) return [{ json: source }];\n\nconst rawSubmission = $('Submit Confirmed Draft').item.json;\nconst submission = rawSubmission?.data && typeof rawSubmission.data === 'object'\n  ? rawSubmission.data\n  : rawSubmission;\nconst orders = Array.isArray(submission?.orders) ? submission.orders : [];\nconst orderNumbers = orders\n  .map((order) => String(order?.order_number || '').trim())\n  .filter(Boolean);\n\nif (!orderNumbers.length) {\n  return [{ json: {\n    ...source,\n    decision: 'human_review',\n    reasonCode: 'SUBMITTED_ORDER_NUMBER_MISSING',\n    responseBody: 'Your shopping request was submitted, but I could not safely read the order number. A staff member will check it before payment.',\n    submissionResult: submission,\n  } }];\n}\n\nconst orderLabel = orderNumbers.length === 1\n  ? 'order ' + orderNumbers[0]\n  : 'orders ' + orderNumbers.join(', ');\nreturn [{ json: {\n  ...source,\n  responseBody: 'Thanks — ' + orderLabel + ' has been created and sent for staff price and availability review. We will confirm everything before payment.',\n  submissionResult: submission,\n} }];"
       },
       "id": "restore-recorded-decision",
       "name": "Restore Recorded Decision",

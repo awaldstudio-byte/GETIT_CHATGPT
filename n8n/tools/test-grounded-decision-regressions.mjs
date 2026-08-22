@@ -15,6 +15,7 @@ const nodeCode = (name) => {
 
 const buildCode = nodeCode('Build Safety Decision');
 const validateCode = nodeCode('Validate Model Decision');
+const restoreCode = nodeCode('Restore Recorded Decision');
 
 const executeCode = (code, namedItems, inputJson = {}, currentJson = {}) => {
   const getNamed = (name) => {
@@ -80,6 +81,14 @@ const validateRaw = (built, raw) => executeCode(
   { message: { content: raw } },
 )[0].json;
 
+const restore = (decision, submission = {}) => executeCode(
+  restoreCode,
+  {
+    'Route Draft Action': decision,
+    'Submit Confirmed Draft': submission,
+  },
+)[0].json;
+
 const runModel = async (built) => {
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -108,6 +117,33 @@ const record = (name, actual, checks) => {
     rawOutput: failures.length ? actual.rawOutput : undefined,
   });
 };
+
+const submittedConfirmation = restore({
+  submitDraft: true,
+  decision: 'respond_now',
+  reasonCode: 'ORDER_CONFIRMATION',
+  responseBody: 'Thanks — your order has been sent for staff review.',
+}, {
+  submitted: true,
+  orders: [{ order_id: 'order-id-1', order_number: 'GET-260822-0042' }],
+});
+record('submitted WhatsApp confirmation contains the persisted order number', submittedConfirmation, [
+  [/GET-260822-0042/.test(submittedConfirmation.responseBody || ''), 'persisted order number was omitted from the customer response'],
+  [/price and availability review/i.test(submittedConfirmation.responseBody || ''), 'staff review caveat was omitted'],
+  [submittedConfirmation.submissionResult?.submitted === true, 'submission result was not preserved for audit'],
+]);
+
+const missingSubmittedNumber = restore({
+  submitDraft: true,
+  decision: 'respond_now',
+  reasonCode: 'ORDER_CONFIRMATION',
+  responseBody: 'Thanks — your order has been sent for staff review.',
+}, { submitted: true, orders: [{ order_id: 'order-id-1' }] });
+record('missing submitted order number fails to staff review instead of inventing one', missingSubmittedNumber, [
+  [missingSubmittedNumber.decision === 'human_review', 'missing order number did not fail to staff review'],
+  [missingSubmittedNumber.reasonCode === 'SUBMITTED_ORDER_NUMBER_MISSING', 'missing order number used the wrong reason'],
+  [!/GET-|#\d/.test(missingSubmittedNumber.responseBody || ''), 'a missing order number was invented'],
+]);
 
 if (!deterministicOnly) {
   const recipeContext = {
