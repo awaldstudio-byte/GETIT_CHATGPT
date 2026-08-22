@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workflowPath = path.resolve(here, '../workflows/getit-messaging-inbound-v1.14.json');
 const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+const deterministicOnly = process.argv.includes('--deterministic-only');
 
 const nodeCode = (name) => {
   const node = workflow.nodes.find((candidate) => candidate.name === name);
@@ -69,6 +70,13 @@ const validate = (built, modelReply) => executeCode(
   { message: { content: JSON.stringify(modelReply) } },
 )[0].json;
 
+const validateRaw = (built, raw) => executeCode(
+  validateCode,
+  { 'Build Safety Decision': built },
+  {},
+  { message: { content: raw } },
+)[0].json;
+
 const runModel = async (built) => {
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -98,30 +106,32 @@ const record = (name, actual, checks) => {
   });
 };
 
-const recipeContext = {
-  ...structuredClone(baseContext),
-  recent_messages: [
-    { direction: 'inbound', body: 'Hey girl, what are we making for dinner' },
-    { direction: 'outbound', body: 'What are you craving?' },
-  ],
-};
-const recipeFollowUp = await runModel(build('Some chicken wraps', recipeContext));
-record('meal discussion does not become an order', recipeFollowUp, [
-  [recipeFollowUp.applyDraft === false, 'mutated a draft during meal discussion'],
-  [recipeFollowUp.decision === 'respond_now', 'did not answer harmless meal discussion'],
-  [!/(added|on (the|your) list|in your order)/i.test(recipeFollowUp.responseBody || ''), 'claimed an order mutation'],
-  [/ingredients(?:\s*\([^)]*\))?:/i.test(recipeFollowUp.responseBody || '') && /method:/i.test(recipeFollowUp.responseBody || ''), 'did not use a readable recipe structure'],
-]);
+if (!deterministicOnly) {
+  const recipeContext = {
+    ...structuredClone(baseContext),
+    recent_messages: [
+      { direction: 'inbound', body: 'Hey girl, what are we making for dinner' },
+      { direction: 'outbound', body: 'What are you craving?' },
+    ],
+  };
+  const recipeFollowUp = await runModel(build('Some chicken wraps', recipeContext));
+  record('meal discussion does not become an order', recipeFollowUp, [
+    [recipeFollowUp.applyDraft === false, 'mutated a draft during meal discussion'],
+    [recipeFollowUp.decision === 'respond_now', 'did not answer harmless meal discussion'],
+    [!/(added|on (the|your) list|in your order)/i.test(recipeFollowUp.responseBody || ''), 'claimed an order mutation'],
+    [/ingredients(?:\s*\([^)]*\))?:/i.test(recipeFollowUp.responseBody || '') && /method:/i.test(recipeFollowUp.responseBody || ''), 'did not use a readable recipe structure'],
+  ]);
 
-const directRecipe = await runModel(build('Can you give me a simple chicken wrap recipe?'));
-record('recipe help is answered', directRecipe, [
-  [directRecipe.applyDraft === false, 'mutated a draft while answering a recipe'],
-  [directRecipe.decision === 'respond_now', 'did not answer the recipe request'],
-  [/(chicken|wrap|ingredient|cook|fry)/i.test(directRecipe.responseBody || ''), 'recipe answer was not useful'],
-  [/serves:/i.test(directRecipe.responseBody || '') && /ingredients:/i.test(directRecipe.responseBody || '') && /method:/i.test(directRecipe.responseBody || ''), 'recipe was not properly formatted'],
-  [/\?\s*$/.test(directRecipe.responseBody || ''), 'recipe did not end with one useful cooking question'],
-  [!/(turn these ingredients|shopping request|place an order)/i.test(directRecipe.responseBody || ''), 'recipe ended with a generic sales question'],
-]);
+  const directRecipe = await runModel(build('Can you give me a simple chicken wrap recipe?'));
+  record('recipe help is answered', directRecipe, [
+    [directRecipe.applyDraft === false, 'mutated a draft while answering a recipe'],
+    [directRecipe.decision === 'respond_now', 'did not answer the recipe request'],
+    [/(chicken|wrap|ingredient|cook|fry)/i.test(directRecipe.responseBody || ''), 'recipe answer was not useful'],
+    [/serves:/i.test(directRecipe.responseBody || '') && /ingredients:/i.test(directRecipe.responseBody || '') && /method:/i.test(directRecipe.responseBody || ''), 'recipe was not properly formatted'],
+    [/\?\s*$/.test(directRecipe.responseBody || ''), 'recipe did not end with one useful cooking question'],
+    [!/(turn these ingredients|shopping request|place an order)/i.test(directRecipe.responseBody || ''), 'recipe ended with a generic sales question'],
+  ]);
+}
 
 const availability = await resolveDecision(build('Do you have Clover milk available?'));
 record('stale catalogue cannot become an availability claim', availability, [
@@ -140,6 +150,80 @@ record('explicit order request may create a grounded draft', explicitOrder, [
   [!/(in stock|available now|R\s?\d)/i.test(explicitOrder.responseBody || ''), 'draft response invented price or stock'],
 ]);
 
+const directOverLimit = build('Please add 25 bottles of Clover milk to my shopping request');
+record('a direct quantity above 24 is rejected instead of silently truncated', directOverLimit, [
+  [directOverLimit.requiresModel === false, 'over-limit quantity reached the model'],
+  [directOverLimit.applyDraft === false, 'over-limit quantity mutated the draft'],
+  [directOverLimit.reasonCode === 'DIRECT_QUANTITY_OVER_UNIT_LIMIT', 'over-limit quantity used the wrong safety path'],
+  [/at most 24/i.test(directOverLimit.responseBody || ''), 'customer was not told the physical-unit limit'],
+]);
+
+const directZero = build('Please add 0 bottles of Clover milk to my shopping request');
+record('zero quantity is rejected instead of becoming one', directZero, [
+  [directZero.requiresModel === false, 'zero quantity reached the model'],
+  [directZero.applyDraft === false, 'zero quantity mutated the draft'],
+  [directZero.reasonCode === 'DIRECT_QUANTITY_INVALID', 'zero quantity used the wrong safety path'],
+]);
+
+const fullUnitDraftContext = {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'automation' },
+  order_draft: {
+    version: 7,
+    state: { stage: 'collecting', orders: [{ items: [{ requested_text: 'Rice', quantity: 24 }], shop_names: [] }] },
+  },
+};
+const cumulativeOverLimit = build('Please add 1 bottle of milk', fullUnitDraftContext);
+record('a new item cannot push an existing draft above 24 units', cumulativeOverLimit, [
+  [cumulativeOverLimit.applyDraft === false, 'cumulative over-limit change mutated the draft'],
+  [cumulativeOverLimit.reasonCode === 'DIRECT_ITEM_OVER_UNIT_LIMIT', 'cumulative unit limit used the wrong path'],
+  [/over 24/i.test(cumulativeOverLimit.responseBody || ''), 'cumulative unit limit was not explained'],
+]);
+
+const followUpItemContext = {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'dry_run' },
+  order_draft: {
+    version: 1,
+    state: {
+      stage: 'collecting',
+      orders: [{ items: [{ requested_text: 'Test Milk', quantity: 2 }], shop_names: [] }],
+    },
+  },
+  recent_messages: [
+    { direction: 'inbound', body: 'Please add 2 bottles of Test Milk to my shopping request' },
+    { direction: 'outbound', body: 'I have kept 2 x Test Milk in the draft. What is the Villiers delivery address or WhatsApp location pin?' },
+  ],
+};
+const followUpItem = build('Please add 1 loaf of Test Bread to my shopping request', followUpItemContext);
+record('a follow-up item is not mistaken for an address answer', followUpItem, [
+  [followUpItem.applyDraft === true, 'follow-up item did not update the active draft'],
+  [followUpItem.reasonCode === 'DIRECT_QUANTITY_ITEM_NEEDS_ADDRESS', 'follow-up item was routed as an address answer'],
+  [(followUpItem.draftState?.orders?.[0]?.items || []).length === 2, 'follow-up item did not preserve both item lines'],
+  [(followUpItem.draftState?.orders?.[0]?.items || []).some((item) => /test bread/i.test(item.requested_text || '')), 'follow-up item was lost'],
+]);
+
+const sixteenLineDraftContext = {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'automation' },
+  order_draft: {
+    version: 8,
+    state: {
+      stage: 'collecting',
+      orders: [{
+        items: Array.from({ length: 16 }, (_, index) => ({ requested_text: `Existing item ${index + 1}`, quantity: 1 })),
+        shop_names: [],
+      }],
+    },
+  },
+};
+const seventeenthLine = build('Please add 1 bottle of milk', sixteenLineDraftContext);
+record('a new item cannot create a seventeenth item line', seventeenthLine, [
+  [seventeenthLine.applyDraft === false, 'seventeenth item line mutated the draft'],
+  [seventeenthLine.reasonCode === 'DIRECT_ITEM_OVER_LINE_LIMIT', 'item-line limit used the wrong path'],
+  [/16 item lines/i.test(seventeenthLine.responseBody || ''), 'item-line limit was not explained'],
+]);
+
 const outsideArea = build('In Cape Town please', {
   ...structuredClone(baseContext),
   recent_messages: [{ direction: 'outbound', body: 'Where should I deliver your order?' }],
@@ -148,6 +232,95 @@ record('Cape Town is never accepted', outsideArea, [
   [outsideArea.requiresModel === false, 'outside-area request reached the model'],
   [outsideArea.decision === 'human_review', 'outside-area request was not handed to a human'],
   [outsideArea.reasonCode === 'OUTSIDE_VILLIERS', 'wrong outside-area reason'],
+]);
+
+const invalidLocation = build('', fullUnitDraftContext, {
+  messageType: 'location',
+  payload: { message: { location: { latitude: 123, longitude: 456 } } },
+});
+record('invalid location coordinates are handed to a human', invalidLocation, [
+  [invalidLocation.requiresModel === false, 'invalid location reached the model'],
+  [invalidLocation.decision === 'human_review', 'invalid location was not handed to a human'],
+  [invalidLocation.reasonCode === 'LOCATION_COORDINATES_INVALID', 'invalid location used the wrong reason'],
+]);
+
+const capeTownPin = build('', fullUnitDraftContext, {
+  messageType: 'location',
+  payload: { message: { location: { latitude: -33.9249, longitude: 18.4241 } } },
+});
+record('an out-of-town WhatsApp pin cannot be labelled Villiers', capeTownPin, [
+  [capeTownPin.requiresModel === false, 'out-of-town pin reached the model'],
+  [capeTownPin.decision === 'human_review', 'out-of-town pin was accepted'],
+  [capeTownPin.reasonCode === 'OUTSIDE_VILLIERS', 'out-of-town pin used the wrong reason'],
+]);
+
+const villiersPinContext = {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'automation' },
+  order_draft: {
+    version: 2,
+    state: { stage: 'collecting', orders: [{ items: [{ requested_text: 'Milk', quantity: 1 }], shop_names: [] }] },
+  },
+};
+const villiersPinBuilt = build('', villiersPinContext, {
+  messageType: 'location',
+  payload: { message: { location: { latitude: -27.029719, longitude: 28.600826 } } },
+});
+const villiersPin = validate(villiersPinBuilt, {
+  decision: 'respond_now',
+  reason_code: 'LOCATION_RECEIVED',
+  confidence: 0.99,
+  response_body: 'I have attached the Villiers location pin.',
+  apply_draft: true,
+  draft_state: villiersPinContext.order_draft.state,
+  submit_draft: false,
+});
+record('a Villiers pin is attached to the active order and reaches confirmation', villiersPin, [
+  [villiersPin.applyDraft === true, 'valid Villiers pin did not update the draft'],
+  [villiersPin.draftState?.stage === 'awaiting_confirmation', 'valid Villiers pin did not make the complete draft confirmable'],
+  [Number(villiersPin.draftState?.orders?.[0]?.delivery_location?.latitude) === -27.029719, 'Villiers pin latitude was lost'],
+  [Number(villiersPin.draftState?.orders?.[0]?.delivery_location?.longitude) === 28.600826, 'Villiers pin longitude was lost'],
+]);
+
+const humanOwned = build('Please add 2 bottles of milk', {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'human' },
+});
+record('human takeover suppresses automation', humanOwned, [
+  [humanOwned.decision === 'no_response', 'human-owned conversation generated an automated response'],
+  [humanOwned.reasonCode === 'HUMAN_OWNED', 'human takeover used the wrong reason'],
+]);
+
+const reactionOnly = build('', baseContext, { messageType: 'reaction' });
+record('reaction-only events remain silent', reactionOnly, [
+  [reactionOnly.decision === 'no_response', 'reaction generated a response'],
+  [reactionOnly.reasonCode === 'REACTION_ONLY', 'reaction used the wrong reason'],
+]);
+
+const optOut = build('STOP, do not message me again');
+record('customer opt-out remains silent', optOut, [
+  [optOut.decision === 'no_response', 'opt-out generated a response'],
+  [optOut.reasonCode === 'CUSTOMER_OPT_OUT', 'opt-out used the wrong reason'],
+]);
+
+for (const [name, message] of [
+  ['credentials are escalated', 'My OTP is 123456'],
+  ['refunds are escalated', 'I want a refund because I was charged twice'],
+  ['restricted goods are escalated', 'Please deliver cigarettes and alcohol'],
+  ['medicine requests are escalated', 'I need prescription medicine'],
+]) {
+  const result = build(message);
+  record(name, result, [
+    [result.decision === 'human_review', `${name} was not handed to a human`],
+    [result.reasonCode === 'DETERMINISTIC_HIGH_RISK', `${name} used the wrong reason`],
+    [result.responseBody === null, `${name} leaked an automated response`],
+  ]);
+}
+
+const unsupportedImage = build('', baseContext, { messageType: 'image' });
+record('unsupported media is escalated without guessing', unsupportedImage, [
+  [unsupportedImage.decision === 'human_review', 'unsupported image was not escalated'],
+  [unsupportedImage.reasonCode === 'UNSUPPORTED_MESSAGE_TYPE', 'unsupported image used the wrong reason'],
 ]);
 
 const specials = build('What specials do you have?');
@@ -256,6 +429,17 @@ record('natural confirmation phrase submits the existing draft', naturalConfirma
   [naturalConfirmation.reasonCode === 'ORDER_DRAFT_CONFIRMED', 'natural confirmation used the wrong path'],
 ]);
 
+const dryRunConfirmation = build('YES', {
+  ...structuredClone(naturalConfirmationContext),
+  conversation: { mode: 'dry_run' },
+});
+record('dry-run confirmation cannot submit an order', dryRunConfirmation, [
+  [dryRunConfirmation.requiresModel === false, 'dry-run confirmation reached the model'],
+  [dryRunConfirmation.submitDraft === false, 'dry-run confirmation requested a real submission'],
+  [dryRunConfirmation.decision === 'human_review', 'dry-run confirmation was not safety-stopped'],
+  [dryRunConfirmation.reasonCode === 'DRY_RUN_DRAFT_CONFIRMATION', 'dry-run confirmation used the wrong reason'],
+]);
+
 const recipeSpecialFollowUp = build('everything you have on special for that recipe', referencedOrderContext, {}, operatorApprovedGrounding);
 record('recipe-specific specials stay in conversational reasoning', recipeSpecialFollowUp, [
   [recipeSpecialFollowUp.requiresModel === false, 'safe recipe-specific comparison unnecessarily reached the model'],
@@ -298,6 +482,79 @@ record('a draft can never masquerade as a submitted order', falseSubmission, [
   [falseSubmission.reasonCode === 'ORDER_NOT_SUBMITTED', 'false submission claim was not intercepted'],
   [falseSubmission.submitDraft === false, 'validator invented a submission'],
   [/not submitted/i.test(falseSubmission.responseBody || ''), 'customer did not receive a truthful correction'],
+]);
+
+const modelPath = build('Please add milk and bread to my shopping request');
+const malformedModelOutput = validateRaw(modelPath, '{not valid json');
+record('malformed model output fails closed', malformedModelOutput, [
+  [malformedModelOutput.decision === 'human_review', 'malformed model output did not fail closed'],
+  [malformedModelOutput.reasonCode === 'LOW_MODEL_CONFIDENCE' || malformedModelOutput.reasonCode === 'MODEL_OUTPUT_INVALID', 'malformed model output used an unexpected reason'],
+  [malformedModelOutput.applyDraft === false, 'malformed model output mutated a draft'],
+]);
+
+const lowConfidence = validate(modelPath, {
+  decision: 'respond_now', reason_code: 'ORDER_REQUEST', confidence: 0.4,
+  response_body: 'I added it.', apply_draft: true,
+  draft_state: { stage: 'collecting', orders: [{ items: [{ requested_text: 'milk', quantity: 1 }] }] },
+  submit_draft: false,
+});
+record('low-confidence order output fails closed', lowConfidence, [
+  [lowConfidence.decision === 'human_review', 'low-confidence output did not fail closed'],
+  [lowConfidence.reasonCode === 'LOW_MODEL_CONFIDENCE', 'low-confidence output used the wrong reason'],
+  [lowConfidence.applyDraft === false, 'low-confidence output mutated a draft'],
+]);
+
+const missingResponse = validate(modelPath, {
+  decision: 'respond_now', reason_code: 'ORDER_REQUEST', confidence: 0.99,
+  response_body: null, apply_draft: false, draft_state: null, submit_draft: false,
+});
+record('respond-now without a safe body fails closed', missingResponse, [
+  [missingResponse.decision === 'human_review', 'empty respond-now decision was allowed'],
+  [missingResponse.reasonCode === 'MISSING_SAFE_RESPONSE', 'empty respond-now used the wrong reason'],
+]);
+
+const inventedAddress = validate(modelPath, {
+  decision: 'respond_now', reason_code: 'ORDER_REQUEST', confidence: 0.99,
+  response_body: 'I added the items.', apply_draft: true,
+  draft_state: {
+    stage: 'awaiting_confirmation',
+    orders: [{
+      items: [{ requested_text: 'milk', quantity: 1 }, { requested_text: 'bread', quantity: 1 }],
+      delivery_address: '1 Long Street, Cape Town',
+    }],
+  },
+  submit_draft: false,
+});
+record('a model cannot invent or import an unverified address', inventedAddress, [
+  [inventedAddress.applyDraft === false, 'invented address mutated the draft'],
+  [inventedAddress.reasonCode === 'DRAFT_CLARIFICATION_REQUIRED', 'invented address used the wrong reason'],
+  [/confirm the delivery address is in Villiers/i.test(inventedAddress.responseBody || ''), 'address clarification was not requested'],
+]);
+
+const modelOverUnitLimit = validate(modelPath, {
+  decision: 'respond_now', reason_code: 'ORDER_REQUEST', confidence: 0.99,
+  response_body: 'I added the items.', apply_draft: true,
+  draft_state: {
+    stage: 'collecting',
+    orders: [{ items: [{ requested_text: 'milk', quantity: 13 }, { requested_text: 'bread', quantity: 12 }] }],
+  },
+  submit_draft: false,
+});
+record('model-generated drafts cannot exceed 24 units', modelOverUnitLimit, [
+  [modelOverUnitLimit.applyDraft === false, 'over-unit model draft was accepted'],
+  [modelOverUnitLimit.reasonCode === 'DRAFT_CLARIFICATION_REQUIRED', 'over-unit model draft used the wrong reason'],
+  [/over the 24-unit limit/i.test(modelOverUnitLimit.responseBody || ''), 'model unit-limit clarification was missing'],
+]);
+
+const inventedPrice = validate(build('How much is milk?'), {
+  decision: 'respond_now', reason_code: 'PRICE', confidence: 0.99,
+  response_body: 'Milk is on special for R19.99 and is in stock today.',
+  apply_draft: false, draft_state: null, submit_draft: false,
+});
+record('invented price and stock claims fail closed', inventedPrice, [
+  [inventedPrice.decision === 'human_review', 'invented price/stock claim was sent'],
+  [inventedPrice.reasonCode === 'UNVERIFIED_FACTUAL_CLAIM', 'invented price/stock used the wrong reason'],
+  [inventedPrice.responseBody === null, 'invented price/stock response was retained'],
 ]);
 
 console.log(JSON.stringify({ passed: results.every((result) => result.passed), results }, null, 2));

@@ -11,7 +11,8 @@
     "workflows:validate": "node n8n/tools/validate-production-workflows.mjs n8n/workflows",
     "test:workflows": "pnpm workflows:build && pnpm workflows:validate",
     "test:decisions": "node n8n/tools/test-grounded-decision-regressions.mjs",
-    "test:ci": "pnpm test:workflows && pnpm build"
+    "test:safety:ci": "node n8n/tools/test-grounded-decision-regressions.mjs --deterministic-only",
+    "test:ci": "pnpm test:workflows && pnpm test:safety:ci && pnpm build"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",

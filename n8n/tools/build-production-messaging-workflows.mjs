@@ -239,6 +239,25 @@ const moneyText = (value) => {
   const amount = Number(value);
   return 'R' + (Number.isInteger(amount) ? String(amount) : amount.toFixed(2));
 };
+const villiersCentre = { latitude: -27.029719, longitude: 28.600826 };
+const villiersDeliveryRadiusKm = 12;
+const distanceKm = (latitude1, longitude1, latitude2, longitude2) => {
+  const radians = (degrees) => Number(degrees) * Math.PI / 180;
+  const deltaLatitude = radians(latitude2 - latitude1);
+  const deltaLongitude = radians(longitude2 - longitude1);
+  const a = Math.sin(deltaLatitude / 2) ** 2
+    + Math.cos(radians(latitude1)) * Math.cos(radians(latitude2)) * Math.sin(deltaLongitude / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+const locationLatitude = Number(source.payload?.message?.location?.latitude);
+const locationLongitude = Number(source.payload?.message?.location?.longitude);
+const hasLocationCoordinates = source.messageType === 'location'
+  && Number.isFinite(locationLatitude)
+  && Number.isFinite(locationLongitude);
+const locationCoordinatesInvalid = source.messageType === 'location'
+  && (!hasLocationCoordinates || locationLatitude < -90 || locationLatitude > 90 || locationLongitude < -180 || locationLongitude > 180);
+const locationOutsideVilliers = hasLocationCoordinates
+  && distanceKm(villiersCentre.latitude, villiersCentre.longitude, locationLatitude, locationLongitude) > villiersDeliveryRadiusKm;
 const specialsText = (heading) => {
   if (!groundedSpecials.length) return null;
   const lines = groundedSpecials.map((item) => '- ' + String(item.product_name || 'Special')
@@ -282,15 +301,28 @@ const knownOutsideArea = /\b(cape town|johannesburg|joburg|pretoria|durban|bloem
 const customerHasConfirmedVilliersAddress = false;
 const locationAnswerNeedsTownCheck = !customerHasConfirmedVilliersAddress
   && source.messageType === 'text'
+  && !explicitOrderIntent
   && /where should i (?:drop|deliver)|delivery (?:address|location)|send (?:a )?(?:location|pin|address)/i.test(String(latestOutbound?.body || ''))
   && !/\bvilliers\b/i.test(text)
   && !knownOutsideArea;
-const final = (decision, reasonCode, responseBody = null, extra = {}) => ({
-  ...source, context, requiresModel: false, decision, reasonCode, responseBody,
-  confidence: 1, schemaValid: true, factsValid: true, modelName: null,
-  modelDigest: null, rawOutput: { source: 'deterministic_gate', decision, reason_code: reasonCode },
-  applyDraft: false, submitDraft: false, draftState: null, responseUi: null, ...extra,
-});
+const final = (decision, reasonCode, responseBody = null, extra = {}) => {
+  const { safetyFlags: extraSafetyFlags = {}, ...extraFields } = extra;
+  return {
+    ...source, context, requiresModel: false, decision, reasonCode, responseBody,
+    confidence: 1, schemaValid: true, factsValid: true, modelName: null,
+    modelDigest: null, rawOutput: { source: 'deterministic_gate', decision, reason_code: reasonCode },
+    applyDraft: false, submitDraft: false, draftState: null, responseUi: null,
+    safetyFlags: {
+      recipeHelp,
+      allowDraftMutation,
+      knownOutsideArea,
+      catalogueCurrent,
+      cataloguePriceCurrent,
+      ...extraSafetyFlags,
+    },
+    ...extraFields,
+  };
+};
 if (source.partnerResult?.handled) {
   const requiresHuman = source.partnerResult?.requires_human === true || !source.partnerResult?.response_body;
   return [{ json: final(requiresHuman ? 'human_review' : 'respond_now', source.partnerResult.reason_code || 'PARTNER_APPLICATION_HANDLED', source.partnerResult.response_body || null, {
@@ -312,6 +344,14 @@ const businessRisk = /\b(refund|charged|chargeback|fraud|id number|identity numb
 const credentialRisk = /\b(otp|password)\b/i.test(lower) || (source.messageType !== 'location' && /\bpin\b/i.test(lower));
 if (businessRisk || credentialRisk) {
   return [{ json: final('human_review', 'DETERMINISTIC_HIGH_RISK') }];
+}
+if (locationCoordinatesInvalid) {
+  return [{ json: final('human_review', 'LOCATION_COORDINATES_INVALID') }];
+}
+if (locationOutsideVilliers) {
+  return [{ json: final('human_review', 'OUTSIDE_VILLIERS', null, {
+    safetyFlags: { recipeHelp, allowDraftMutation: false, knownOutsideArea: true },
+  }) }];
 }
 if (knownOutsideArea) {
   return [{ json: final('human_review', 'OUTSIDE_VILLIERS', null, {
@@ -390,9 +430,9 @@ if (allowDraftMutation && referentialOrder) {
         const shopMatch = original.match(/\s+-\s+R\s?\d+(?:\.\d{1,2})?\s+at\s+(.+)$/i);
         let requestedText = original.replace(/\s+-\s+R\s?\d+(?:\.\d{1,2})?\s+at\s+.+$/i, '').trim();
         let quantity = 1;
-        const quantityMatch = requestedText.match(/^(\d+)\s+(cans?|tins?|bottles?|packs?|loaves?|bars?|units?|items?)\s+(.+)$/i);
+        const quantityMatch = requestedText.match(/^(\d+)\s+(cans?|tins?|bottles?|packs?|loaf|loaves|bars?|units?|items?)\s+(.+)$/i);
         if (quantityMatch) {
-          quantity = Math.max(1, Math.min(24, Number(quantityMatch[1])));
+          quantity = Number(quantityMatch[1]);
           requestedText = quantityMatch[3].trim();
         }
         return requestedText ? [{
@@ -417,6 +457,9 @@ if (allowDraftMutation && referentialOrder) {
       ...(Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names : []),
       ...items.map((item) => item?.requested_shop_name).filter(Boolean),
     ])].slice(0,4);
+    if (items.some((item) => !Number.isSafeInteger(Number(item?.quantity)) || Number(item?.quantity) < 1)) {
+      return [{ json: final('respond_now', 'REFERENCED_LIST_INVALID_QUANTITY', 'Each item needs a whole-number quantity between 1 and 24. Which quantity should I use?') }];
+    }
     if (items.length > 16) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_ITEM_LIMIT', 'That list has more than 16 item lines. Which items should I leave out?') }];
     if (units > 24) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_UNIT_LIMIT', 'That list has more than 24 units. Which quantities should I reduce?') }];
     if (shopNames.length > 3) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_SHOP_LIMIT', 'That list uses more than three shops. Which shops should I use?') }];
@@ -445,9 +488,15 @@ if (allowDraftMutation && referentialOrder) {
     return [{ json: final('respond_now', ready ? 'REFERENCED_VISIBLE_LIST_READY' : 'REFERENCED_VISIBLE_LIST_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];
   }
 }
-const directQuantityItem = text.match(/\b(?:add|buy|get|order|need|want)(?:\s+me)?\s+(\d+)\s+(?:bottles?|cans?|tins?|packs?|loaves?|bars?|units?|items?)\s+(.+?)(?:\s+to\s+(?:my|the)\s+(?:shopping\s+)?(?:request|list|order))?[\s.!?]*$/i);
+const directQuantityItem = text.match(/\b(?:add|buy|get|order|need|want)(?:\s+me)?\s+(\d+)\s+(?:bottles?|cans?|tins?|packs?|loaf|loaves|bars?|units?|items?)\s+(.+?)(?:\s+to\s+(?:my|the)\s+(?:shopping\s+)?(?:request|list|order))?[\s.!?]*$/i);
 if (allowDraftMutation && !referentialOrder && directQuantityItem) {
-  const quantity = Math.max(1, Math.min(24, Number(directQuantityItem[1])));
+  const quantity = Number(directQuantityItem[1]);
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    return [{ json: final('respond_now', 'DIRECT_QUANTITY_INVALID', 'Please use a whole-number quantity between 1 and 24.') }];
+  }
+  if (quantity > 24) {
+    return [{ json: final('respond_now', 'DIRECT_QUANTITY_OVER_UNIT_LIMIT', 'One order can contain at most 24 physical units. Which quantity up to 24 should I use?') }];
+  }
   const requestedText = String(directQuantityItem[2] || '').trim().replace(/^of\s+/i, '').slice(0,500);
   if (requestedText) {
     const existingOrder = Array.isArray(draft?.state?.orders) && draft.state.orders[0] ? draft.state.orders[0] : {};
@@ -455,6 +504,20 @@ if (allowDraftMutation && !referentialOrder && directQuantityItem) {
     const item = { requested_text: requestedText, quantity, requested_shop_name: null, substitution_allowed: false };
     const itemMap = new Map([...existingItems, item].map((entry) => [String(entry?.requested_text || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(), entry]));
     const items = [...itemMap.values()].filter((entry) => entry?.requested_text);
+    const units = items.reduce((sum, entry) => sum + Number(entry?.quantity || 1), 0);
+    const shopNames = [...new Set([
+      ...(Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names : []),
+      ...items.map((entry) => entry?.requested_shop_name).filter(Boolean),
+    ])];
+    if (items.length > 16) {
+      return [{ json: final('respond_now', 'DIRECT_ITEM_OVER_LINE_LIMIT', 'That would take the order over 16 item lines. Which existing item should I remove first?') }];
+    }
+    if (units > 24) {
+      return [{ json: final('respond_now', 'DIRECT_ITEM_OVER_UNIT_LIMIT', 'That would take the order over 24 physical units. Which quantities should I reduce?') }];
+    }
+    if (shopNames.length > 3) {
+      return [{ json: final('respond_now', 'DIRECT_ITEM_OVER_SHOP_LIMIT', 'That order already uses three shops. Which shop should I leave out?') }];
+    }
     const deliveryAddress = String(existingOrder?.delivery_address || '').trim() || null;
     const deliveryLocation = existingOrder?.delivery_location || null;
     const ready = Boolean(deliveryAddress || deliveryLocation);
@@ -463,7 +526,7 @@ if (allowDraftMutation && !referentialOrder && directQuantityItem) {
       orders: [{
         label: existingOrder?.label || null,
         items,
-        shop_names: Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names.slice(0,3) : [],
+        shop_names: shopNames,
         delivery_address: deliveryAddress,
         delivery_location: deliveryLocation,
         substitution_preference: existingOrder?.substitution_preference || null,
