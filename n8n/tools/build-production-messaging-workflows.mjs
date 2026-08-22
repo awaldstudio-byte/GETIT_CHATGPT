@@ -202,7 +202,8 @@ if (!/^[0-9a-f-]{36}$/i.test(String(id))) throw new Error('Supabase returned an 
 return [{ json: { ...source, conversationId: String(id) } }];`;
 
 const attachMessageCode = String.raw`
-const source = $('Attach Conversation').item.json;
+const base = $('Attach Conversation').item.json;
+const source = base.messageType === 'audio' ? $('Attach Voice Transcript').item.json : base;
 const raw = $input.first().json.message_id_raw;
 const messageId = Number(String(raw).replace(/"/g, ''));
 if (!Number.isSafeInteger(messageId) || messageId < 1) throw new Error('Supabase returned an invalid message ID.');
@@ -212,6 +213,24 @@ const attachPartnerApplicationCode = String.raw`
 const source = $('Attach Message').item.json;
 const result = $input.first().json;
 return [{ json: { ...source, partnerResult: result && typeof result === 'object' ? result : { handled: false } } }];`;
+
+const attachVoiceTranscriptCode = String.raw`
+const source = $('Attach Conversation').item.json;
+const result = $input.first().json || {};
+const transcript = String(result.text || '').replace(/\u0000/g, '').replace(/\s+/g, ' ').trim().slice(0, 4000);
+const transcriptionOk = result.ok === true && transcript.length > 0;
+return [{ json: {
+  ...source,
+  body: transcriptionOk ? transcript : null,
+  voiceTranscription: {
+    ok: transcriptionOk,
+    language: transcriptionOk ? String(result.language || '').slice(0, 20) || null : null,
+    languageProbability: transcriptionOk && Number.isFinite(Number(result.language_probability)) ? Number(result.language_probability) : null,
+    durationSeconds: Number.isFinite(Number(result.duration_seconds)) ? Number(result.duration_seconds) : null,
+    segmentCount: Number.isSafeInteger(Number(result.segment_count)) ? Number(result.segment_count) : null,
+    errorCode: transcriptionOk ? null : String(result.code || result.detail || 'VOICE_TRANSCRIPTION_FAILED').slice(0, 120),
+  },
+} }];`;
 
 const buildSafetyDecisionCode = String.raw`
 const source = $('Attach Partner Application').item.json;
@@ -320,6 +339,7 @@ const final = (decision, reasonCode, responseBody = null, extra = {}) => {
     safetyFlags: {
       recipeHelp,
       allowDraftMutation,
+      explicitOrderIntent,
       knownOutsideArea,
       catalogueCurrent,
       cataloguePriceCurrent,
@@ -438,7 +458,10 @@ if (knownOutsideArea) {
     safetyFlags: { recipeHelp, allowDraftMutation: false, knownOutsideArea: true },
   }) }];
 }
-if (!['text','button','interactive','location'].includes(source.messageType)) {
+const supportedVoiceTranscript = source.messageType === 'audio'
+  && source.voiceTranscription?.ok === true
+  && text.length > 0;
+if (!['text','button','interactive','location'].includes(source.messageType) && !supportedVoiceTranscript) {
   return [{ json: final('human_review', 'UNSUPPORTED_MESSAGE_TYPE') }];
 }
 if (draft?.state?.stage === 'awaiting_confirmation' && /^(?:yes(?: please)?|confirm(?:ed)?|correct|(?:that(?:['’]s| is)|this is) correct|that(?:['’]s| is) right|looks right|exactly|go ahead|ja|reg so)[\s.!?]*$/i.test(text)) {
@@ -696,6 +719,9 @@ if (allowDraftMutation && !referentialOrder && directQuantityItem) {
     return [{ json: final('respond_now', ready ? 'DIRECT_QUANTITY_ITEM_READY' : 'DIRECT_QUANTITY_ITEM_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];
   }
 }
+if (allowDraftMutation && explicitOrderIntent && /\b(anything|something)\b/i.test(text)) {
+  return [{ json: final('respond_now', 'ORDER_DETAILS_REQUIRED', 'I can help with that order. What exact item and quantity would you like from each shop?') }];
+}
 if (pureGreeting) {
   return [{ json: final('light_ack', 'GREETING_ONLY', 'Hi! How can Getit help you today?') }];
 }
@@ -736,9 +762,10 @@ const responseSchema = {
 };
 const system = "You are Getit's structured WhatsApp assistant for Villiers. Supabase and the supplied grounding object are authoritative. The recovered Getit Ordering Agent v1.6 and Launch Rules v1.1 are binding behaviour. Be warm, clever, patient, natural and concise; match the customer's language and energy when confident; understand obvious spelling mistakes; answer the actual question; ask one useful question at a time; and never make them repeat visible information. GENERAL HELP: you may answer harmless food, cooking and recipe questions helpfully. A meal idea, dish name or recipe conversation is NOT an order. Give a useful short recipe or suggestion when asked, then optionally offer to turn its ingredients into a Getit shopping request. Do not pivot an availability or order question into an unsolicited recipe. When safety_flags.recipeSpecialComparison is true, do not repeat or rewrite the recipe: compare its visible ingredient names with grounding.matches and mention only direct ingredient matches that have price_kind=special, price_verified=true and reference_only=false; ignore every unrelated match even if it has a price. Never set apply_draft during recipe/general conversation unless safety_flags.allow_draft_mutation is true and the customer clearly asked to order. ORDER INTENT: do not create or change a draft merely because food or a product is mentioned. Only mutate a draft when safety_flags.allow_draft_mutation is true. When the customer clearly asks to add, buy, get or order an item and allow_draft_mutation is true, you MUST set apply_draft=true, preserve the exact requested item and quantity in a collecting draft, and ask for any missing address or shop detail afterward; a missing address is not a reason to skip the draft. Never silently copy customer.default_address into a new order: a saved address is operator context only and must be supplied or explicitly confirmed in the active conversation before use. Never say added, on the list, in your order, booked, submitted or confirmed unless the matching draft mutation or real submission is being persisted. For unlisted goods preserve the customer's exact wording and say price and availability are pending. CATALOGUE: catalogue matches are hints, not proof. If active_public_rows is zero, never claim Getit currently has a product, price, special or stock. You may quote an effective_price only when that exact match has price_verified=true and reference_only=false; say when an operator-approved temporary price is valid through. Never quote any price from reference_only matches. Stock is never confirmed unless stock_verified=true, even when a price is approved. SERVICE AREA: normal launch orders are Villiers only. Any outside-area request is human_review; never accept an outside address or promise delivery there. GREETING: greet only when the current message itself is a greeting; otherwise never reopen with hi/hello/welcome or the customer's name. FORMAT: plain WhatsApp text, usually 1-4 short sentences under 600 characters; no corporate filler. Never invent a price, promotion, stock, availability, ETA, payment result, order number, status, action or successful order change. Preserve the existing draft and verified customer/order facts. Keep separate orders, addresses, shops, fees, totals and statuses separate. Limits per order: 16 item lines, 24 physical units, 1-3 shops. Fees are R35 for one shop up to 16 units, R50 for one shop with 17-24 units, and R65 for two or three shops up to 24 units, but no final total while goods prices are pending. Restricted goods, safety, disputes, refunds, payment ambiguity, direct human requests, outside Villiers, or low confidence are human_review. Use respond_now/light_ack only with a useful safe response_body; no_response/wait_for_event/human_review require null response_body. Draft state is {stage,orders}; allowed stages: idle, collecting, awaiting_confirmation, cancelled. Each order may contain label, items, shop_names, delivery_address, delivery_location, substitution_preference, requested_window, notes. Each item contains requested_text, quantity, requested_shop_name, substitution_allowed. Do not add backend-owned facts. Always submit_draft=false; confirmations are deterministic. Material changes reset confirmation. When complete, set awaiting_confirmation and summarize clearly with PRICE PENDING where needed. Output only the required JSON.";
 const recipeGuidance = " RECIPE EXPERIENCE: When recipe_help is true and the customer named a dish, give a genuinely useful WhatsApp recipe rather than one compressed paragraph. Keep it under 1400 characters and use this readable structure: dish title; Serves; Ingredients with dash bullets; Method with numbered steps; one practical Tip; then exactly one relevant cooking question about portions, heat level, dietary needs, available ingredients or equipment. Use affordable, commonly available South African ingredients and mention a sensible substitution when helpful, but never claim Getit or a shop has them. If the request is broad, such as what should we make for dinner, ask one focused preference question first instead of guessing. Do not append a sales or ordering question to every recipe. Only offer to turn ingredients into a shopping request after the cooking need has been answered, and never more than one question in the reply.";
-const fullSystem = system.replace('Output only the required JSON.', recipeGuidance + ' Output only the required JSON.');
-const safetyFlags = { recipeHelp, recipeSpecialComparison, allowDraftMutation, knownOutsideArea: false, catalogueCurrent, cataloguePriceCurrent };
-const user = { current_message: { text, type: source.messageType, payload: source.payload }, safety_flags: safetyFlags, grounding, context };
+const voiceGuidance = " VOICE EXPERIENCE: When current_message.transcribed_voice is true, the supplied text is the completed transcription of the customer's current voice note. Treat it exactly like customer-written text; never claim that the audio or transcript is missing.";
+const fullSystem = system.replace('Output only the required JSON.', voiceGuidance + recipeGuidance + ' Output only the required JSON.');
+const safetyFlags = { recipeHelp, recipeSpecialComparison, allowDraftMutation, explicitOrderIntent, knownOutsideArea: false, catalogueCurrent, cataloguePriceCurrent };
+const user = { current_message: { text, type: supportedVoiceTranscript ? 'text' : source.messageType, original_type: source.messageType, transcribed_voice: supportedVoiceTranscript, payload: source.payload }, safety_flags: safetyFlags, grounding, context };
 return [{ json: {
   ...source, context, grounding, safetyFlags, requiresModel: true,
   ollamaRequest: {
@@ -783,6 +810,14 @@ let applyDraft = parsed?.apply_draft === true;
 let submitDraft = false;
 let draftState = applyDraft && parsed?.draft_state && typeof parsed.draft_state === 'object' ? parsed.draft_state : null;
 if (confidence < 0.65) { decision='human_review'; reasonCode='LOW_MODEL_CONFIDENCE'; responseBody=null; applyDraft=false; submitDraft=false; draftState=null; }
+if (valid && decision === 'no_response' && safety.explicitOrderIntent === true) {
+  decision='respond_now';
+  reasonCode='ORDER_DETAILS_REQUIRED';
+  responseBody='I can help with that order. What exact item and quantity would you like from each shop?';
+  applyDraft=false;
+  submitDraft=false;
+  draftState=null;
+}
 if (['no_response','wait_for_event','human_review'].includes(decision)) responseBody=null;
 if (responseBody) {
   responseBody = responseBody.replace(/^(hi|hello|hey|hallo|good (morning|afternoon|evening))(\s+[A-Za-z'-]+)?[\s,!?.-]*/i, '').trim();
@@ -1043,7 +1078,11 @@ const inboundNodes = [
   http('Upsert Conversation', [-300, -360], `${SUPABASE_RPC}/upsert_messaging_conversation`, '={{ JSON.stringify({ p_provider: $json.provider, p_channel: $json.channel, p_external_contact_key: $json.externalContactKey, p_external_conversation_key: $json.externalConversationKey, p_customer_id: null, p_initial_mode: "dry_run" }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'conversation_id_raw' }),
   code('Attach Conversation', [-40, -360], attachConversationCode),
   http('Upsert Customer Identity', [220, -360], `${SUPABASE_RPC}/upsert_messaging_customer_identity`, '={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_phone: $json.externalContactKey, p_full_name: $json.profileName, p_preferred_language: null }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'customer_id_raw' }),
-  http('Persist Inbound Message', [480, -360], `${SUPABASE_RPC}/record_inbound_message`, '={{ JSON.stringify({ p_event_id: $("Attach Conversation").item.json.eventId, p_conversation_id: $("Attach Conversation").item.json.conversationId, p_idempotency_key: "in:meta_whatsapp:" + $("Attach Conversation").item.json.providerMessageId, p_provider_message_id: $("Attach Conversation").item.json.providerMessageId, p_message_type: $("Attach Conversation").item.json.messageType, p_body: $("Attach Conversation").item.json.body, p_payload: $("Attach Conversation").item.json.payload }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'message_id_raw' }),
+  ifNode('Voice Message?', [460, -700], '={{ $("Attach Conversation").item.json.messageType === "audio" }}'),
+  http('Fetch Meta Voice Audio', [720, -700], `${EDGE_BASE}/meta-whatsapp-media`, '={{ JSON.stringify({ media_id: $("Attach Conversation").item.json.payload?.message?.audio?.id, expected_sha256: $("Attach Conversation").item.json.payload?.message?.audio?.sha256 }) }}', apiKeyCredential, { timeout: 30000, neverError: true, retryOnFail: true, maxTries: 2 }),
+  http('Transcribe Voice Audio', [980, -700], 'http://host.docker.internal:8788/transcribe', '={{ JSON.stringify({ audio_base64: $json.audio_base64, mime_type: $json.mime_type, sha256: $json.sha256 }) }}', {}, { timeout: 90000, neverError: true, retryOnFail: false, onError: 'continueRegularOutput' }),
+  code('Attach Voice Transcript', [1240, -700], attachVoiceTranscriptCode),
+  http('Persist Inbound Message', [480, -360], `${SUPABASE_RPC}/record_inbound_message`, '={{ JSON.stringify({ p_event_id: $json.eventId, p_conversation_id: $json.conversationId, p_idempotency_key: "in:meta_whatsapp:" + $json.providerMessageId, p_provider_message_id: $json.providerMessageId, p_message_type: $json.messageType, p_body: $json.body, p_payload: { ...$json.payload, ...($json.voiceTranscription ? { voice_transcription: $json.voiceTranscription } : {}) } }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'message_id_raw' }),
   code('Attach Message', [740, -360], attachMessageCode),
   http('Process Partner Application', [1000, -360], `${SUPABASE_RPC}/process_partner_application_message_v4`, '={{ JSON.stringify({ p_conversation_id:$json.conversationId, p_message_id:$json.messageId, p_message_type:$json.messageType, p_body:$json.body, p_payload:$json.payload, p_interactive_reply_id:$json.interactiveReplyId }) }}'),
   code('Attach Partner Application', [1260, -360], attachPartnerApplicationCode),
@@ -1062,7 +1101,7 @@ const inboundNodes = [
   ]),
   http('Submit Confirmed Draft', [2560, -540], `${SUPABASE_RPC}/confirm_and_submit_messaging_order_draft_v1`, '={{ JSON.stringify({ p_conversation_id: $("Route Draft Action").item.json.conversationId, p_expected_version: $("Route Draft Action").item.json.context.order_draft.version, p_confirmation_message_id: $("Route Draft Action").item.json.messageId }) }}'),
   http('Replace Draft State', [2560, -360], `${SUPABASE_RPC}/replace_messaging_order_draft_state`, '={{ JSON.stringify({ p_conversation_id: $("Route Draft Action").item.json.conversationId, p_expected_version: $("Route Draft Action").item.json.context.order_draft.version, p_state: $("Route Draft Action").item.json.draftState, p_source_message_id: $("Route Draft Action").item.json.messageId }) }}'),
-  http('Record Final Decision', [2820, -360], `${SUPABASE_RPC}/record_messaging_decision`, '={{ (() => { const d=$("Route Draft Action").item.json; return JSON.stringify({ p_event_id:d.eventId, p_decision:d.decision, p_reason_code:d.reasonCode, p_prompt_version:"getit-production-structured-v1-20-0", p_confidence:d.confidence, p_facts:{ conversation_mode:d.context?.conversation?.mode, message_type:d.messageType, draft_updated:d.applyDraft, draft_submitted:d.submitDraft, partner_application:d.partnerHandled||false, partner_flow_kind:d.partnerFlowKind||null, response_ui:d.responseUi||null, recipe_help:d.safetyFlags?.recipeHelp===true, explicit_order_intent:d.safetyFlags?.allowDraftMutation===true, catalogue_current:d.safetyFlags?.catalogueCurrent===true, catalogue_price_current:d.safetyFlags?.cataloguePriceCurrent===true, dry_run:d.context?.conversation?.mode==="dry_run" }, p_model_name:d.modelName, p_model_digest:d.modelDigest, p_raw_output:d.rawOutput, p_schema_valid:d.schemaValid, p_facts_valid:d.factsValid, p_is_final:true }); })() }}'),
+  http('Record Final Decision', [2820, -360], `${SUPABASE_RPC}/record_messaging_decision`, '={{ (() => { const d=$("Route Draft Action").item.json; return JSON.stringify({ p_event_id:d.eventId, p_decision:d.decision, p_reason_code:d.reasonCode, p_prompt_version:"getit-production-structured-v1-20-0", p_confidence:d.confidence, p_facts:{ conversation_mode:d.context?.conversation?.mode, message_type:d.messageType, draft_updated:d.applyDraft, draft_submitted:d.submitDraft, partner_application:d.partnerHandled||false, partner_flow_kind:d.partnerFlowKind||null, response_ui:d.responseUi||null, recipe_help:d.safetyFlags?.recipeHelp===true, explicit_order_intent:d.safetyFlags?.explicitOrderIntent===true, catalogue_current:d.safetyFlags?.catalogueCurrent===true, catalogue_price_current:d.safetyFlags?.cataloguePriceCurrent===true, dry_run:d.context?.conversation?.mode==="dry_run" }, p_model_name:d.modelName, p_model_digest:d.modelDigest, p_raw_output:d.rawOutput, p_schema_valid:d.schemaValid, p_facts_valid:d.factsValid, p_is_final:true }); })() }}'),
   code('Restore Recorded Decision', [3080, -360], restoreDecisionCode),
   ifNode('Queue Customer Response?', [3340, -360], '={{ ["respond_now","light_ack"].includes($json.decision) && Boolean($json.responseBody) }}'),
   http('Queue Decision Response', [3600, -500], `${SUPABASE_RPC}/queue_decision_response_v4`, '={{ JSON.stringify({ p_event_id:$json.eventId, p_idempotency_key:"decision:" + ($json.eventKey || $json.eventId) + ":v1-20", p_body:$json.responseBody, p_payload:{ origin:"getit-production-inbound-v1-20", draft_updated:$json.applyDraft, draft_submitted:$json.submitDraft, partner_application:$json.partnerHandled||false, flow_kind:$json.partnerFlowKind||null, response_ui:$json.responseUi||null, grounded:true }, p_offer_welcome_menu:true, p_max_attempts:5 }) }}'),
@@ -1078,7 +1117,10 @@ const inboundConnections = connections(
   ['Every Second',0,'Claim Messaging Events'], ['Run Inbound Worker',0,'Claim Messaging Events'],
   ['Claim Messaging Events',0,'Normalize Meta Events'], ['Normalize Meta Events',0,'Route Event'],
   ['Route Event',0,'Upsert Conversation'], ['Upsert Conversation',0,'Attach Conversation'],
-  ['Attach Conversation',0,'Upsert Customer Identity'], ['Upsert Customer Identity',0,'Persist Inbound Message'],
+  ['Attach Conversation',0,'Upsert Customer Identity'], ['Upsert Customer Identity',0,'Voice Message?'],
+  ['Voice Message?',0,'Fetch Meta Voice Audio'], ['Fetch Meta Voice Audio',0,'Transcribe Voice Audio'],
+  ['Transcribe Voice Audio',0,'Attach Voice Transcript'], ['Attach Voice Transcript',0,'Persist Inbound Message'],
+  ['Voice Message?',1,'Persist Inbound Message'],
   ['Persist Inbound Message',0,'Attach Message'], ['Attach Message',0,'Process Partner Application'],
   ['Process Partner Application',0,'Attach Partner Application'], ['Attach Partner Application',0,'Fetch Messaging Context'],
   ['Fetch Messaging Context',0,'Fetch Messaging Grounding'], ['Fetch Messaging Grounding',0,'Build Safety Decision'], ['Build Safety Decision',0,'Mark Read and Show AI Typing'],

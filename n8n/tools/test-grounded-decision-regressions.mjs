@@ -16,6 +16,7 @@ const nodeCode = (name) => {
 const buildCode = nodeCode('Build Safety Decision');
 const validateCode = nodeCode('Validate Model Decision');
 const restoreCode = nodeCode('Restore Recorded Decision');
+const voiceTranscriptCode = nodeCode('Attach Voice Transcript');
 
 const executeCode = (code, namedItems, inputJson = {}, currentJson = {}) => {
   const getNamed = (name) => {
@@ -89,6 +90,12 @@ const restore = (decision, submission = {}) => executeCode(
   },
 )[0].json;
 
+const attachVoiceTranscript = (sourceInput, transcription) => executeCode(
+  voiceTranscriptCode,
+  { 'Attach Conversation': sourceInput },
+  transcription,
+)[0].json;
+
 const runModel = async (built) => {
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -143,6 +150,61 @@ record('missing submitted order number fails to staff review instead of inventin
   [missingSubmittedNumber.decision === 'human_review', 'missing order number did not fail to staff review'],
   [missingSubmittedNumber.reasonCode === 'SUBMITTED_ORDER_NUMBER_MISSING', 'missing order number used the wrong reason'],
   [!/GET-|#\d/.test(missingSubmittedNumber.responseBody || ''), 'a missing order number was invented'],
+]);
+
+const attachedVoice = attachVoiceTranscript({
+  messageType: 'audio',
+  body: null,
+  payload: { message: { audio: { id: '123456789' } } },
+}, {
+  ok: true,
+  text: '  Please   add 2 bottles of Clover milk to my shopping request.  ',
+  language: 'en',
+  language_probability: 0.98,
+  duration_seconds: 4.2,
+  segment_count: 1,
+});
+record('a successful voice transcription becomes safe decision input', attachedVoice, [
+  [attachedVoice.body === 'Please add 2 bottles of Clover milk to my shopping request.', 'voice transcript was not normalised'],
+  [attachedVoice.messageType === 'audio', 'original WhatsApp message type was lost'],
+  [attachedVoice.voiceTranscription?.ok === true, 'voice transcription audit metadata was lost'],
+]);
+
+const voiceOrder = build(attachedVoice.body, baseContext, {
+  messageType: 'audio',
+  voiceTranscription: attachedVoice.voiceTranscription,
+});
+const voiceItems = voiceOrder.draftState?.orders?.flatMap((order) => order.items || []) || [];
+const voiceModelInput = voiceOrder.ollamaRequest
+  ? JSON.parse(voiceOrder.ollamaRequest.messages?.[1]?.content || '{}')
+  : null;
+record('a transcribed voice order uses the same guarded draft path as text', voiceOrder, [
+  [voiceOrder.applyDraft === true, 'transcribed voice order did not create a draft'],
+  [voiceOrder.reasonCode === 'DIRECT_QUANTITY_ITEM_NEEDS_ADDRESS', 'transcribed voice order used the wrong decision path'],
+  [voiceItems.some((item) => /clover milk/i.test(item.requested_text || '') && Number(item.quantity) === 2), 'transcribed voice item or quantity was lost'],
+  [voiceModelInput === null || voiceModelInput.current_message?.type === 'text', 'transcribed voice was still labelled as unsupported audio to the model'],
+  [voiceModelInput === null || voiceModelInput.current_message?.transcribed_voice === true, 'model was not told that voice transcription succeeded'],
+]);
+
+const vagueVoiceOrder = build("I'd like to place an order. I want something from OK and something from Usave. Please get me anything from the two shops.", baseContext, {
+  messageType: 'audio',
+  voiceTranscription: { ok: true, language: 'en' },
+});
+record('an underspecified transcribed order asks for exact items instead of going silent or guessing', vagueVoiceOrder, [
+  [vagueVoiceOrder.decision === 'respond_now', 'underspecified voice order did not receive a safe reply'],
+  [vagueVoiceOrder.reasonCode === 'ORDER_DETAILS_REQUIRED', 'underspecified voice order used the wrong clarification path'],
+  [vagueVoiceOrder.applyDraft === false, 'underspecified voice order guessed and mutated a draft'],
+  [/exact item and quantity/i.test(vagueVoiceOrder.responseBody || ''), 'underspecified voice order did not ask for exact items and quantities'],
+]);
+
+const failedVoice = build('', baseContext, {
+  messageType: 'audio',
+  voiceTranscription: { ok: false, errorCode: 'VOICE_TRANSCRIPTION_FAILED' },
+});
+record('failed voice transcription fails closed to staff review', failedVoice, [
+  [failedVoice.decision === 'human_review', 'failed voice transcription did not fail closed'],
+  [failedVoice.reasonCode === 'UNSUPPORTED_MESSAGE_TYPE', 'failed voice transcription used the wrong safety reason'],
+  [failedVoice.applyDraft === false, 'failed voice transcription mutated an order draft'],
 ]);
 
 if (!deterministicOnly) {

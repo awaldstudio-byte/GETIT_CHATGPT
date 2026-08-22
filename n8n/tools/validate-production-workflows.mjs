@@ -11,6 +11,9 @@ const files = [
 const prohibited = [/respond\.io/i, /respondio/i, /chatwoot/i];
 const requiredInbound = [
   'Claim Messaging Events',
+  'Fetch Meta Voice Audio',
+  'Transcribe Voice Audio',
+  'Attach Voice Transcript',
   'Persist Inbound Message',
   'Fetch Messaging Context',
   'Build Safety Decision',

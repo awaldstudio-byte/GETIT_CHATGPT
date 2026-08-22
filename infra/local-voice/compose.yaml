@@ -1,0 +1,25 @@
+services:
+  voice-transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: getit-voice-transcriber
+    restart: unless-stopped
+    environment:
+      VOICE_MODEL: base
+      VOICE_COMPUTE_TYPE: int8
+      VOICE_CPU_THREADS: "4"
+      VOICE_MAX_SECONDS: "300"
+    ports:
+      - "127.0.0.1:8788:8788"
+    volumes:
+      - getit-voice-models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+volumes:
+  getit-voice-models:
