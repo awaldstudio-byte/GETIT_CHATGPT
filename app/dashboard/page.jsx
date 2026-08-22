@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import CatalogueManager from "../components/CatalogueManager";
 import DriverBoard from "../components/DriverBoard";
 import FocusStrip from "../components/FocusStrip";
+import FloatingChatDock from "../components/FloatingChatDock";
+import MessagingInbox from "../components/MessagingInbox";
 import OperationsMap from "../components/OperationsMap";
+import PartnerApplications from "../components/PartnerApplications";
 import PaymentQueue from "../components/PaymentQueue";
 import SupportQueue from "../components/SupportQueue";
 import Topbar from "../components/Topbar";
@@ -21,6 +24,10 @@ const EMPTY_DATA = {
   shopPins: [],
   openQueries: [],
   health: null,
+  messagingInbox: [],
+  messagingDirectory: [],
+  messagingHealth: null,
+  partnerApplications: [],
 };
 
 export default function DashboardPage() {
@@ -41,6 +48,7 @@ export default function DashboardPage() {
   const [toast, setToast] = useState(null);
   const [mutation, setMutation] = useState(null);
   const [apiClient, setApiClient] = useState(null);
+  const [realtimeRevision, setRealtimeRevision] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -123,6 +131,9 @@ export default function DashboardPage() {
       onPaymentWaiting: () => {
         showToast("New payment request — a customer is waiting");
       },
+      onRealtimeEvent: ({ table }) => {
+        if (table.startsWith("messaging_")) setRealtimeRevision((value) => value + 1);
+      },
       onConnectionState: ({ status, error: realtimeError }) => {
         setConnection(status);
         if (realtimeError) handleError(realtimeError);
@@ -174,6 +185,8 @@ export default function DashboardPage() {
 
   const helpCount = data.openQueries.length;
   const locationCount = data.orderPins.filter((pin) => pin.location_quality !== "confirmed").length;
+  const messagingCount = data.messagingInbox.filter((conversation) => conversation.requires_attention).length;
+  const applicationsCount = data.partnerApplications.filter((application) => ["submitted", "reviewing"].includes(application.status)).length;
 
   const childProps = useMemo(
     () => ({
@@ -183,8 +196,9 @@ export default function DashboardPage() {
       onToast: showToast,
       onRefresh: refresh,
       onNavigate: setActiveTab,
+      realtimeRevision,
     }),
-    [data, apiClient, handleError, showToast, refresh],
+    [data, apiClient, handleError, showToast, refresh, realtimeRevision],
   );
 
   if (!authReady || (session && !apiClient)) {
@@ -205,6 +219,8 @@ export default function DashboardPage() {
         paymentCount={paymentCount}
         helpCount={helpCount}
         locationCount={locationCount}
+        messagingCount={messagingCount}
+        applicationsCount={applicationsCount}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         refreshing={refreshing}
@@ -265,9 +281,15 @@ export default function DashboardPage() {
         <OperationsMap {...childProps} />
       ) : activeTab === "catalogue" ? (
         <CatalogueManager onError={handleError} onToast={showToast} />
+      ) : activeTab === "messaging" ? (
+        <MessagingInbox {...childProps} />
+      ) : activeTab === "applications" ? (
+        <PartnerApplications {...childProps} />
       ) : (
         <SupportQueue {...childProps} />
       )}
+
+      <FloatingChatDock {...childProps} />
     </div>
   );
 }

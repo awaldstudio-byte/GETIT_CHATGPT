@@ -8,6 +8,10 @@
 .stats span { display: block; color: var(--muted); font-size: 12px; font-weight: 800; }
 .stats strong { display: block; margin-top: 7px; color: var(--navy); font-size: 24px; }
 .trustNote { margin-bottom: 16px; padding: 13px 15px; border: 1px solid #f0d18f; border-radius: 13px; background: #fff8e7; color: #72510f; line-height: 1.45; }
+.freshnessNotice { display: grid; gap: 3px; margin: -4px 0 16px; padding: 13px 15px; border: 1px solid #d6b96a; border-radius: 13px; background: #fffaf0; color: #72510f; }
+.freshnessNotice strong { font-size: 13px; }
+.freshnessNotice span { font-size: 12px; line-height: 1.45; }
+.freshnessUrgent { border-color: #e1a2a2; background: #fff3f2; color: #922d2d; }
 .priceFinder { margin-bottom: 16px; padding: 20px; }
 .priceFinderHeading { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
 .priceFinderHeading h2 { margin: 3px 0 5px; }

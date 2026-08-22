@@ -1,0 +1,168 @@
+{
+  "id": "GETIT_MESSAGING_OUTBOUND_V1_14",
+  "name": "[PRODUCTION SAFETY-GATED] Getit Messaging Outbound v1.18",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "every-second",
+      "name": "Every Second",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -640,
+        -80
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "run-outbound-worker",
+      "name": "Run Outbound Worker",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/claim_outbox_messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": {
+          "p_worker_id": "getit-production-outbound-v1-18",
+          "p_limit": 10,
+          "p_lease_seconds": 90
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "claim-outbox-messages",
+      "name": "Claim Outbox Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -380,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-dispatch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ outbox_id:$json.outbox_id, message_id:$json.message_id, conversation_id:$json.conversation_id, destination:$json.destination, idempotency_key:$json.idempotency_key, payload:$json.payload, attempt_number:$json.attempt_number, lock_token:$json.lock_token }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "dispatch-through-protected-meta-function",
+      "name": "Dispatch Through Protected Meta Function",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -80,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every Second": {
+      "main": [
+        [
+          {
+            "node": "Claim Outbox Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Outbound Worker": {
+      "main": [
+        [
+          {
+            "node": "Claim Outbox Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Outbox Messages": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Through Protected Meta Function",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 120,
+    "saveManualExecutions": true,
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "getitBoundary": "production-claim-authorize-dispatch"
+  },
+  "tags": []
+}

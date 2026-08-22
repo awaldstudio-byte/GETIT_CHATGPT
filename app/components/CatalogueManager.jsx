@@ -296,6 +296,23 @@ export default function CatalogueManager({ onError, onToast }) {
   const lastPublished = typeof settings.catalogue_last_published_at === "string"
     ? settings.catalogue_last_published_at
     : null;
+  const sourceFreshness = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expired = [];
+    const expiringSoon = [];
+
+    for (const batch of workspace.queue) {
+      if (!batch.valid_to) continue;
+      const validUntil = new Date(`${String(batch.valid_to).slice(0, 10)}T12:00:00`);
+      validUntil.setHours(0, 0, 0, 0);
+      const daysRemaining = Math.round((validUntil.getTime() - today.getTime()) / 86_400_000);
+      if (daysRemaining < 0) expired.push(batch);
+      else if (daysRemaining <= 1) expiringSoon.push(batch);
+    }
+
+    return { expired, expiringSoon };
+  }, [workspace.queue]);
 
   const run = async (task, success) => {
     setBusy(true);
@@ -502,6 +519,17 @@ export default function CatalogueManager({ onError, onToast }) {
         <strong>Flyer rule:</strong> regional flyer specials may be shown while comparison is pending,
         but the final price and stock are confirmed before payment.
       </div>
+
+      {(sourceFreshness.expired.length || sourceFreshness.expiringSoon.length) && (
+        <div className={`${styles.freshnessNotice} ${sourceFreshness.expired.length ? styles.freshnessUrgent : ""}`}>
+          <strong>Catalogue refresh needed</strong>
+          <span>
+            {sourceFreshness.expired.length
+              ? `${sourceFreshness.expired.length} source${sourceFreshness.expired.length === 1 ? " has" : "s have"} expired. Upload a current flyer before using any listed price.`
+              : `${sourceFreshness.expiringSoon.length} source${sourceFreshness.expiringSoon.length === 1 ? " expires" : "s expire"} within one day. Get the next flyer ready now.`}
+          </span>
+        </div>
+      )}
 
       <section className={`panel ${styles.priceFinder}`}>
         <div className={styles.priceFinderHeading}>

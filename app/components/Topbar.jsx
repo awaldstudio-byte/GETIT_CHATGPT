@@ -14,6 +14,8 @@ export default function Topbar({
   paymentCount,
   helpCount,
   locationCount,
+  messagingCount,
+  applicationsCount,
   activeTab,
   setActiveTab,
   refreshing,
@@ -26,6 +28,8 @@ export default function Topbar({
     ['payments', 'Payments', paymentCount],
     ['map', 'Map & locations', locationCount],
     ['catalogue', 'Find a price', 0],
+    ['messaging', 'Messaging', messagingCount],
+    ['applications', 'Shop manager', applicationsCount],
     ['help', 'Needs help', helpCount],
   ];
 

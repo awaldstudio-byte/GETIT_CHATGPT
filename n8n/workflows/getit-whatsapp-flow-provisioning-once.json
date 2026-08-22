@@ -1,0 +1,257 @@
+{
+  "id": "GETIT_WHATSAPP_FLOW_PROVISION_ONCE",
+  "name": "[ONE-TIME] Getit WhatsApp Flow Provisioning",
+  "active": false,
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Run once",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "inspect-meta-account",
+      "name": "Inspect Meta Account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -560,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-flow-admin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"action\":\"inspect\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      }
+    },
+    {
+      "id": "provision-shop-flow",
+      "name": "Provision Shop Flow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -300,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-flow-admin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"action\":\"provision_draft\",\"name\":\"Getit Shop Application v1\",\"flow_json\":{\"version\":\"7.3\",\"screens\":[{\"id\":\"SHOP_APPLICATION\",\"title\":\"Getit - Add a shop\",\"terminal\":true,\"success\":true,\"data\":{},\"layout\":{\"type\":\"SingleColumnLayout\",\"children\":[{\"type\":\"TextHeading\",\"text\":\"Add your shop to Getit\"},{\"type\":\"TextBody\",\"text\":\"Tell us about your Villiers shop. Your application will go to the Getit team for review.\"},{\"type\":\"Form\",\"name\":\"form\",\"children\":[{\"type\":\"TextInput\",\"name\":\"applicant_name\",\"label\":\"Your full name\",\"input-type\":\"text\",\"required\":true,\"max-chars\":100},{\"type\":\"TextInput\",\"name\":\"business_name\",\"label\":\"Shop name\",\"input-type\":\"text\",\"required\":true,\"max-chars\":120},{\"type\":\"TextArea\",\"name\":\"business_type\",\"label\":\"What does it sell?\",\"helper-text\":\"Example: groceries, takeaway food, clothing or hardware\",\"required\":true,\"max-length\":300},{\"type\":\"TextArea\",\"name\":\"location_text\",\"label\":\"Villiers address\",\"helper-text\":\"Type the shop's full street address\",\"required\":true,\"max-length\":500},{\"type\":\"TextCaption\",\"text\":\"Submitting sends this application to Getit for review. It does not make the shop live. Privacy: awaldstudio.com/getit-privacy-policy\"},{\"type\":\"Footer\",\"label\":\"Send to Getit\",\"on-click-action\":{\"name\":\"complete\",\"payload\":{\"application_type\":\"shop\",\"applicant_name\":\"${form.applicant_name}\",\"business_name\":\"${form.business_name}\",\"business_type\":\"${form.business_type}\",\"location_text\":\"${form.location_text}\"}}}]}]}}]}}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      }
+    },
+    {
+      "id": "provision-driver-flow",
+      "name": "Provision Driver Flow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -40,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-flow-admin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"action\":\"provision_draft\",\"name\":\"Getit Driver Application v1\",\"flow_json\":{\"version\":\"7.3\",\"screens\":[{\"id\":\"DRIVER_APPLICATION\",\"title\":\"Getit - Driver form\",\"terminal\":true,\"success\":true,\"data\":{},\"layout\":{\"type\":\"SingleColumnLayout\",\"children\":[{\"type\":\"TextHeading\",\"text\":\"Apply to deliver with Getit\"},{\"type\":\"TextBody\",\"text\":\"Getit is still launching. You need your own working motorbike, and applying does not guarantee work.\"},{\"type\":\"Form\",\"name\":\"form\",\"children\":[{\"type\":\"TextInput\",\"name\":\"applicant_name\",\"label\":\"Your full name\",\"input-type\":\"text\",\"required\":true,\"max-chars\":100},{\"type\":\"TextInput\",\"name\":\"location_text\",\"label\":\"Your Villiers area\",\"input-type\":\"text\",\"required\":true,\"max-chars\":120},{\"type\":\"TextArea\",\"name\":\"availability\",\"label\":\"When can you work?\",\"helper-text\":\"Example: weekdays, evenings or weekends\",\"required\":true,\"max-length\":300},{\"type\":\"OptIn\",\"name\":\"has_own_bike\",\"label\":\"I have my own working motorbike.\",\"required\":true},{\"type\":\"OptIn\",\"name\":\"launch_ack\",\"label\":\"I understand that Getit is still launching and work is not guaranteed.\",\"required\":true},{\"type\":\"TextCaption\",\"text\":\"Submitting sends this application to Getit for review. Privacy: awaldstudio.com/getit-privacy-policy\"},{\"type\":\"Footer\",\"label\":\"Send to Getit\",\"on-click-action\":{\"name\":\"complete\",\"payload\":{\"application_type\":\"driver\",\"applicant_name\":\"${form.applicant_name}\",\"location_text\":\"${form.location_text}\",\"availability\":\"${form.availability}\",\"has_own_bike\":\"${form.has_own_bike}\",\"launch_ack\":\"${form.launch_ack}\"}}}]}]}}]}}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      }
+    },
+    {
+      "id": "publish-shop-flow",
+      "name": "Publish Shop Flow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-flow-admin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"action\":\"publish\",\"flow_id\":\"1756566568719813\",\"expected_name\":\"Getit Shop Application v1\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      }
+    },
+    {
+      "id": "publish-driver-flow",
+      "name": "Publish Driver Flow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-flow-admin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "{\"action\":\"publish\",\"flow_id\":\"2604256086674509\",\"expected_name\":\"Getit Driver Application v1\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      }
+    },
+    {
+      "id": "summarise-flows",
+      "name": "Summarise Flows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { inspect: $('Inspect Meta Account').first().json, shop: $('Publish Shop Flow').first().json, driver: $('Publish Driver Flow').first().json } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Run once": {
+      "main": [
+        [
+          {
+            "node": "Inspect Meta Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect Meta Account": {
+      "main": [
+        [
+          {
+            "node": "Provision Shop Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provision Shop Flow": {
+      "main": [
+        [
+          {
+            "node": "Provision Driver Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provision Driver Flow": {
+      "main": [
+        [
+          {
+            "node": "Publish Shop Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Shop Flow": {
+      "main": [
+        [
+          {
+            "node": "Publish Driver Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Driver Flow": {
+      "main": [
+        [
+          {
+            "node": "Summarise Flows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "staticData": null,
+  "meta": {
+    "getitPurpose": "One-time Meta WhatsApp Flow provisioning; never activate."
+  },
+  "tags": []
+}

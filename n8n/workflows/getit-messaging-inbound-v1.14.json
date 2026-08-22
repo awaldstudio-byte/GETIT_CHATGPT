@@ -1,0 +1,1493 @@
+{
+  "id": "GETIT_MESSAGING_INBOUND_V1_14",
+  "name": "[PRODUCTION DRY-RUN SAFE] Getit Messaging Inbound v1.20",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "every-second",
+      "name": "Every Second",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1320,
+        -80
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "run-inbound-worker",
+      "name": "Run Inbound Worker",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1320,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/claim_messaging_events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": {
+          "p_worker_id": "getit-production-inbound-v1-18",
+          "p_limit": 1,
+          "p_lease_seconds": 120
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "claim-messaging-events",
+      "name": "Claim Messaging Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1080,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst events = $input.all().flatMap((item) => Array.isArray(item.json) ? item.json : [item.json]);\nconst quarantine = (event, code, detail) => ({\n  kind: 'quarantine', eventId: event.event_id, eventKey: event.event_key,\n  lockToken: event.lock_token, errorCode: code, errorDetail: detail,\n});\nconst messageBody = (message, normalized) => {\n  if (typeof normalized?.body === 'string') return normalized.body;\n  if (message?.type === 'interactive') {\n    if (message.interactive?.type === 'nfm_reply') return message.interactive?.nfm_reply?.body || 'Submitted a Getit form';\n    return message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || null;\n  }\n  if (message?.type === 'button') return message.button?.text || null;\n  if (message?.type === 'location') {\n    const lat = Number(message.location?.latitude);\n    const lng = Number(message.location?.longitude);\n    return Number.isFinite(lat) && Number.isFinite(lng) ? 'Location pin: ' + lat + ', ' + lng : null;\n  }\n  if (message?.type === 'reaction') return message.reaction?.emoji || null;\n  if (message?.type === 'image') return message.image?.caption || null;\n  if (message?.type === 'document') return message.document?.caption || message.document?.filename || null;\n  return null;\n};\nreturn events.filter((event) => event?.event_id).map((event) => {\n  if (event.provider !== 'meta_whatsapp' || event.channel !== 'whatsapp') {\n    return { json: quarantine(event, 'UNSUPPORTED_PROVIDER', 'Only Meta WhatsApp receipts are accepted by this worker.') };\n  }\n  if (event.event_type === 'message.received') {\n    const normalized = event.payload?.normalized;\n    const message = normalized?.message;\n    if (!normalized?.externalContactKey || !normalized?.providerMessageId || !message) {\n      return { json: quarantine(event, 'INVALID_INBOUND_MESSAGE', 'The persisted Meta message is missing its canonical identity.') };\n    }\n    return { json: {\n      kind: 'inbound_message', eventId: event.event_id, eventKey: event.event_key,\n      lockToken: event.lock_token, attemptNumber: event.attempt_number,\n      provider: 'meta_whatsapp', channel: 'whatsapp',\n      externalContactKey: String(normalized.externalContactKey),\n      externalConversationKey: normalized.externalConversationKey ? String(normalized.externalConversationKey) : null,\n      providerMessageId: String(normalized.providerMessageId),\n      messageType: String(normalized.messageType || message.type || 'unknown').toLowerCase(),\n      body: messageBody(message, normalized), profileName: normalized.profileName || null,\n      interactiveReplyId: message?.interactive?.button_reply?.id || message?.interactive?.list_reply?.id || message?.button?.payload || null,\n      providerTimestamp: normalized.providerTimestamp || null,\n      payload: { metadata: { phone_number_id: normalized.phoneNumberId || null, display_phone_number: normalized.displayPhoneNumber || null }, message },\n    } };\n  }\n  if (String(event.event_type).startsWith('message.status.')) {\n    const status = event.payload?.status;\n    if (!status?.id || !status?.status) return { json: quarantine(event, 'INVALID_STATUS_EVENT', 'The Meta status receipt is incomplete.') };\n    return { json: {\n      kind: 'message_status', eventId: event.event_id, eventKey: event.event_key,\n      lockToken: event.lock_token, attemptNumber: event.attempt_number,\n      provider: 'meta_whatsapp', providerMessageId: String(status.id),\n      status: String(status.status).toLowerCase(), providerTimestamp: status.timestamp || null,\n      errors: Array.isArray(status.errors) ? status.errors : [], payload: status,\n    } };\n  }\n  return { json: quarantine(event, 'META_EVENT_REQUIRES_REVIEW', 'No automatic handler for ' + event.event_type + '.') };\n});"
+      },
+      "id": "normalize-meta-events",
+      "name": "Normalize Meta Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -820,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "inbound_message",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Inbound message"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "message_status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Delivery status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.kind }}",
+                    "rightValue": "quarantine",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Quarantine"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Fallback"
+        }
+      },
+      "id": "route-event",
+      "name": "Route Event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -560,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/upsert_messaging_conversation",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_provider: $json.provider, p_channel: $json.channel, p_external_contact_key: $json.externalContactKey, p_external_conversation_key: $json.externalConversationKey, p_customer_id: null, p_initial_mode: \"dry_run\" }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "conversation_id_raw"
+            }
+          }
+        }
+      },
+      "id": "upsert-conversation",
+      "name": "Upsert Conversation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -300,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Normalize Meta Events').item.json;\nconst raw = $input.first().json.conversation_id_raw;\nlet id; try { id = JSON.parse(raw); } catch { id = raw; }\nif (!/^[0-9a-f-]{36}$/i.test(String(id))) throw new Error('Supabase returned an invalid conversation ID.');\nreturn [{ json: { ...source, conversationId: String(id) } }];"
+      },
+      "id": "attach-conversation",
+      "name": "Attach Conversation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/upsert_messaging_customer_identity",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_phone: $json.externalContactKey, p_full_name: $json.profileName, p_preferred_language: null }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "customer_id_raw"
+            }
+          }
+        }
+      },
+      "id": "upsert-customer-identity",
+      "name": "Upsert Customer Identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/record_inbound_message",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_event_id: $(\"Attach Conversation\").item.json.eventId, p_conversation_id: $(\"Attach Conversation\").item.json.conversationId, p_idempotency_key: \"in:meta_whatsapp:\" + $(\"Attach Conversation\").item.json.providerMessageId, p_provider_message_id: $(\"Attach Conversation\").item.json.providerMessageId, p_message_type: $(\"Attach Conversation\").item.json.messageType, p_body: $(\"Attach Conversation\").item.json.body, p_payload: $(\"Attach Conversation\").item.json.payload }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "message_id_raw"
+            }
+          }
+        }
+      },
+      "id": "persist-inbound-message",
+      "name": "Persist Inbound Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        480,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Attach Conversation').item.json;\nconst raw = $input.first().json.message_id_raw;\nconst messageId = Number(String(raw).replace(/\"/g, ''));\nif (!Number.isSafeInteger(messageId) || messageId < 1) throw new Error('Supabase returned an invalid message ID.');\nreturn [{ json: { ...source, messageId } }];"
+      },
+      "id": "attach-message",
+      "name": "Attach Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/process_partner_application_message_v4",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_conversation_id:$json.conversationId, p_message_id:$json.messageId, p_message_type:$json.messageType, p_body:$json.body, p_payload:$json.payload, p_interactive_reply_id:$json.interactiveReplyId }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "process-partner-application",
+      "name": "Process Partner Application",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1000,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Attach Message').item.json;\nconst result = $input.first().json;\nreturn [{ json: { ...source, partnerResult: result && typeof result === 'object' ? result : { handled: false } } }];"
+      },
+      "id": "attach-partner-application",
+      "name": "Attach Partner Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/get_messaging_context",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_message_limit: 12, p_order_limit: 5 }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-messaging-context",
+      "name": "Fetch Messaging Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1520,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/get_messaging_grounding",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_query: (() => { const body=String($(\"Attach Partner Application\").item.json.body||\"\"); if (!/\\b(recipe|ingredients|them|those|these|everything)\\b/i.test(body)) return body; const recent=Array.isArray($json.recent_messages)?$json.recent_messages:[]; const recipe=[...recent].reverse().find(m=>m?.direction===\"outbound\" && /ingredients:/i.test(String(m?.body||\"\"))); const bullets=recipe?String(recipe.body||\"\").split(/\\r?\\n/).filter(line=>/^\\s*[-\\u2022]\\s+\\S/.test(line)).join(\" \"):\"\"; return (body+\" \"+bullets).slice(0,3000); })(), p_limit: 12 }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "fetch-messaging-grounding",
+      "name": "Fetch Messaging Grounding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1760,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Attach Partner Application').item.json;\nconst context = $('Fetch Messaging Context').item.json;\nconst grounding = $input.first().json && typeof $input.first().json === 'object' ? $input.first().json : {};\ncontext.grounding = grounding;\nconst text = String(source.body || '').trim();\nconst lower = text.toLowerCase();\nconst mode = context?.conversation?.mode || 'dry_run';\nconst draft = context?.order_draft || { state: { stage: 'idle', orders: [] }, version: 0 };\nconst recent = Array.isArray(context?.recent_messages) ? context.recent_messages : [];\nconst catalogueCurrent = Number(grounding?.catalogue?.active_public_rows || 0) > 0;\nconst cataloguePriceCurrent = grounding?.catalogue?.current_price_quote_allowed === true;\nconst groundedSpecials = (Array.isArray(grounding?.matches) ? grounding.matches : [])\n  .filter((item) => item?.price_verified === true && item?.reference_only === false && item?.price_kind === 'special' && Number.isFinite(Number(item?.effective_price)))\n  .slice(0, 6);\nconst specialCategoryIds = {\n  getit_specials_milk: 'Milk & dairy',\n  getit_specials_bakery: 'Bread & bakery',\n  getit_specials_meat: 'Meat & protein',\n  getit_specials_drinks: 'Drinks & snacks',\n  getit_specials_household: 'Household',\n};\nconst moneyText = (value) => {\n  const amount = Number(value);\n  return 'R' + (Number.isInteger(amount) ? String(amount) : amount.toFixed(2));\n};\nconst specialsText = (heading) => {\n  if (!groundedSpecials.length) return null;\n  const lines = groundedSpecials.map((item) => '- ' + String(item.product_name || 'Special')\n    + (item.size ? ' (' + String(item.size) + ')' : '')\n    + ' - ' + moneyText(item.effective_price)\n    + ' at ' + String(item.shop_name || 'Villiers shop'));\n  const validThrough = groundedSpecials.find((item) => item.price_valid_through)?.price_valid_through;\n  const dateText = validThrough\n    ? new Date(String(validThrough) + 'T12:00:00Z').toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', timeZone: 'UTC' })\n    : null;\n  return heading + '\\n\\n' + lines.join('\\n')\n    + (dateText ? '\\n\\nPrices approved through ' + dateText + '.' : '')\n    + ' Stock still needs confirmation from the shop. Type another product to search.';\n};\nconst pureGreeting = /^(hi|hello|hey|hallo|good (morning|afternoon|evening))(\\s+(there|getit))?[\\s.!?,]*$/i.test(text);\nconst recipeWords = /\\b(recipe|recipes|cook|cooking|meal idea|dinner idea|lunch idea|breakfast idea|what (?:can|should|are) (?:i|we) (?:make|cook)|what are we making|ingredients for)\\b/i;\nconst explicitOrderWords = /\\b(place|start|make) (?:an? )?order\\b|\\b(order|buy|purchase|add)\\b|\\b(get|bring|deliver) me\\b|\\b(i need|i want|i'd like|i would like|please get|can you get|shopping list)\\b/i;\nconst priorFoodConversation = recent.slice(-8).some((message) => recipeWords.test(String(message?.body || '')));\nconst explicitOrderIntent = explicitOrderWords.test(text);\nconst recipeSpecialComparison = priorFoodConversation\n  && /\\b(specials?|on special|promotions?|deals?)\\b/i.test(text)\n  && /\\b(recipe|ingredients|them|those|these|everything)\\b/i.test(text);\nconst recipeHelp = !explicitOrderIntent && !recipeSpecialComparison && (recipeWords.test(text) || priorFoodConversation);\nconst activeDraft = ['collecting','awaiting_confirmation'].includes(String(draft?.state?.stage || ''));\nconst orderButton = source.interactiveReplyId === 'getit_order_groceries' || /^order groceries$/i.test(text);\nconst latestOutbound = [...recent].reverse().find((message) => message?.direction === 'outbound');\nconst latestVisibleList = [...recent].reverse().find((message) => {\n  if (message?.direction !== 'outbound') return false;\n  return String(message?.body || '').split(/\\r?\\n/).some((line) => /^\\s*[-\\u2022]\\s+\\S/.test(line));\n});\nconst referentialOrder = explicitOrderIntent && (\n  /\\b(them|those|these|the items|all(?: of)? (?:them|it)|everything|ingredien\\w*|same)\\b/i.test(text)\n  || (Boolean(latestVisibleList) && /\\b(order|buy|get)\\b[^.!?]{0,35}\\b(for me|please)\\b/i.test(text))\n);\nconst explicitOrderPrompt = /what would you like to order|what do you need from the shop|send (?:me )?your shopping list/i.test(String(latestOutbound?.body || ''));\nconst allowDraftMutation = !recipeHelp && (activeDraft || orderButton || explicitOrderIntent || explicitOrderPrompt);\nconst knownOutsideArea = /\\b(cape town|johannesburg|joburg|pretoria|durban|bloemfontein|soweto|polokwane|mbombela|nelspruit|kimberley|gqeberha|port elizabeth|east london|george|stellenbosch|paarl|middelburg|bethlehem|frankfort|heidelberg|vanderbijlpark|vereeniging)\\b/i.test(text);\n// A saved customer address is useful operator context, but never counts as\n// confirmation for a new WhatsApp order. The customer must provide or confirm\n// the destination in the active draft.\nconst customerHasConfirmedVilliersAddress = false;\nconst locationAnswerNeedsTownCheck = !customerHasConfirmedVilliersAddress\n  && source.messageType === 'text'\n  && /where should i (?:drop|deliver)|delivery (?:address|location)|send (?:a )?(?:location|pin|address)/i.test(String(latestOutbound?.body || ''))\n  && !/\\bvilliers\\b/i.test(text)\n  && !knownOutsideArea;\nconst final = (decision, reasonCode, responseBody = null, extra = {}) => ({\n  ...source, context, requiresModel: false, decision, reasonCode, responseBody,\n  confidence: 1, schemaValid: true, factsValid: true, modelName: null,\n  modelDigest: null, rawOutput: { source: 'deterministic_gate', decision, reason_code: reasonCode },\n  applyDraft: false, submitDraft: false, draftState: null, responseUi: null, ...extra,\n});\nif (source.partnerResult?.handled) {\n  const requiresHuman = source.partnerResult?.requires_human === true || !source.partnerResult?.response_body;\n  return [{ json: final(requiresHuman ? 'human_review' : 'respond_now', source.partnerResult.reason_code || 'PARTNER_APPLICATION_HANDLED', source.partnerResult.response_body || null, {\n    partnerHandled: true,\n    partnerApplicationId: source.partnerResult.application_id || null,\n    partnerApplicationType: source.partnerResult.application_type || null,\n    partnerApplicationStatus: source.partnerResult.status || null,\n    partnerFlowKind: source.partnerResult.flow_kind || null,\n  }) }];\n}\nif (['human','paused'].includes(mode)) {\n  return [{ json: final('no_response', 'HUMAN_OWNED') }];\n}\nif (source.messageType === 'reaction') return [{ json: final('no_response', 'REACTION_ONLY') }];\nif (/\\b(stop|unsubscribe|opt\\s*out|do not message|moenie.*boodskap)\\b/i.test(lower)) {\n  return [{ json: final('no_response', 'CUSTOMER_OPT_OUT') }];\n}\nconst businessRisk = /\\b(refund|charged|chargeback|fraud|id number|identity number|unsafe|danger|threat|injur|emergency|medicine|prescription|alcohol|cigarette|tobacco)\\b/i.test(lower);\nconst credentialRisk = /\\b(otp|password)\\b/i.test(lower) || (source.messageType !== 'location' && /\\bpin\\b/i.test(lower));\nif (businessRisk || credentialRisk) {\n  return [{ json: final('human_review', 'DETERMINISTIC_HIGH_RISK') }];\n}\nif (knownOutsideArea) {\n  return [{ json: final('human_review', 'OUTSIDE_VILLIERS', null, {\n    safetyFlags: { recipeHelp, allowDraftMutation: false, knownOutsideArea: true },\n  }) }];\n}\nif (!['text','button','interactive','location'].includes(source.messageType)) {\n  return [{ json: final('human_review', 'UNSUPPORTED_MESSAGE_TYPE') }];\n}\nif (draft?.state?.stage === 'awaiting_confirmation' && /^(?:yes(?: please)?|confirm(?:ed)?|correct|(?:that(?:['’]s| is)|this is) correct|that(?:['’]s| is) right|looks right|exactly|go ahead|ja|reg so)[\\s.!?]*$/i.test(text)) {\n  if (mode !== 'automation') {\n    return [{ json: final('human_review', 'DRY_RUN_DRAFT_CONFIRMATION') }];\n  }\n  return [{ json: final('respond_now', 'ORDER_DRAFT_CONFIRMED', 'Thanks. Your order has been sent for staff payment review. We will confirm current pricing and availability before payment.', { submitDraft: true }) }];\n}\nif (source.interactiveReplyId === 'getit_browse_specials') {\n  const reply = cataloguePriceCurrent\n    ? 'Browse this week\\'s Villiers specials by category, or choose product search and type exactly what you need.'\n    : 'The Villiers specials need refreshing. You can still search for an item and I will mark its price and stock for checking.';\n  return [{ json: final('respond_now', 'OPEN_SPECIALS_BROWSER', reply, { responseUi: 'specials_menu' }) }];\n}\nif (source.interactiveReplyId === 'getit_specials_search') {\n  return [{ json: final('respond_now', 'SPECIALS_PRODUCT_SEARCH', 'What product would you like to find on special? For example: milk, bread or chicken.') }];\n}\nif (specialCategoryIds[source.interactiveReplyId]) {\n  const heading = specialCategoryIds[source.interactiveReplyId] + ' specials';\n  const reply = cataloguePriceCurrent && specialsText(heading);\n  return [{ json: final('respond_now', reply ? 'GROUNDED_SPECIALS_CATEGORY' : 'SPECIALS_CATEGORY_EMPTY', reply || ('I could not find a current ' + heading.toLowerCase() + ' match. Type a product name and I will search the approved Villiers specials.')) }];\n}\nif (recipeSpecialComparison) {\n  const recipeMessage = [...recent].reverse().find((message) => message?.direction === 'outbound' && /ingredients:/i.test(String(message?.body || '')));\n  const recipeBody = String(recipeMessage?.body || '');\n  const ingredientSection = (recipeBody.match(/ingredients:\\s*([\\s\\S]*?)(?=\\n\\s*(?:method|steps|instructions)\\s*:)/i) || [])[1] || '';\n  const ingredientLines = ingredientSection.split(/\\r?\\n/)\n    .map((line) => line.replace(/^\\s*[-\\u2022]\\s+/, '').replace(/\\*\\*/g, '').trim())\n    .filter(Boolean)\n    .slice(0,16);\n  const stopTokens = new Set(['with','from','into','about','taste','optional','using','regular','assorted','sauce','tomato','peeled','cubed','sliced','thickly','grease','dish','sugar']);\n  const tokensFor = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').split(/\\s+/)\n    .filter((token) => token.length >= 4 && !stopTokens.has(token) && !/^\\d/.test(token));\n  const candidates = (Array.isArray(grounding?.matches) ? grounding.matches : [])\n    .filter((item) => item?.price_kind === 'special' && item?.price_verified === true && item?.reference_only === false && Number.isFinite(Number(item?.effective_price)));\n  const selected = [];\n  for (const ingredient of ingredientLines) {\n    const ingredientTokens = new Set(tokensFor(ingredient));\n    const ranked = candidates.map((item) => {\n      const productTokens = tokensFor([item?.product_name,item?.brand,item?.size].filter(Boolean).join(' '));\n      const overlap = productTokens.filter((token) => ingredientTokens.has(token));\n      return { item, score: overlap.length };\n    }).filter((entry) => entry.score > 0)\n      .sort((a,b) => b.score - a.score || Number(a.item.effective_price) - Number(b.item.effective_price));\n    if (ranked[0]) selected.push(ranked[0].item);\n  }\n  const unique = [...new Map(selected.map((item) => [String(item.product_id || item.product_name) + ':' + String(item.shop_id || item.shop_name), item])).values()].slice(0,8);\n  if (!unique.length) {\n    return [{ json: final('respond_now', 'NO_GROUNDED_RECIPE_SPECIALS', 'I could not find a current special that directly matches those recipe ingredients. I can still prepare the ingredient order with prices and stock marked for staff checking.', { safetyFlags: { recipeHelp:false, recipeSpecialComparison:true, allowDraftMutation:false, catalogueCurrent, cataloguePriceCurrent } }) }];\n  }\n  const lines = unique.map((item) => '- ' + String(item.product_name || 'Item')\n    + (item.size ? ' (' + String(item.size) + ')' : '')\n    + ' - ' + moneyText(item.effective_price)\n    + ' at ' + String(item.shop_name || 'Villiers shop'));\n  const validThrough = unique.find((item) => item.price_valid_through)?.price_valid_through;\n  const dateText = validThrough ? new Date(String(validThrough) + 'T12:00:00Z').toLocaleDateString('en-ZA', { day:'numeric', month:'short', timeZone:'UTC' }) : null;\n  const response = 'These specials directly match ingredients from that recipe:\\n\\n' + lines.join('\\n')\n    + (dateText ? '\\n\\nPrices approved through ' + dateText + '.' : '')\n    + ' Stock still needs confirmation from the shop. Reply ORDER THESE and I will keep this exact list together.';\n  return [{ json: final('respond_now', 'GROUNDED_RECIPE_SPECIALS', response, { safetyFlags: { recipeHelp:false, recipeSpecialComparison:true, allowDraftMutation:false, catalogueCurrent, cataloguePriceCurrent } }) }];\n}\nif (allowDraftMutation && referentialOrder) {\n  const latestList = latestVisibleList;\n  const parsedItems = latestList\n    ? String(latestList.body || '').split(/\\r?\\n/).flatMap((line) => {\n        const match = line.match(/^\\s*[-\\u2022]\\s+(.+?)\\s*$/);\n        if (!match) return [];\n        const original = match[1].replace(/\\*\\*/g, '').trim();\n        const shopMatch = original.match(/\\s+-\\s+R\\s?\\d+(?:\\.\\d{1,2})?\\s+at\\s+(.+)$/i);\n        let requestedText = original.replace(/\\s+-\\s+R\\s?\\d+(?:\\.\\d{1,2})?\\s+at\\s+.+$/i, '').trim();\n        let quantity = 1;\n        const quantityMatch = requestedText.match(/^(\\d+)\\s+(cans?|tins?|bottles?|packs?|loaves?|bars?|units?|items?)\\s+(.+)$/i);\n        if (quantityMatch) {\n          quantity = Math.max(1, Math.min(24, Number(quantityMatch[1])));\n          requestedText = quantityMatch[3].trim();\n        }\n        return requestedText ? [{\n          requested_text: requestedText.slice(0,500),\n          quantity,\n          requested_shop_name: shopMatch ? shopMatch[1].trim().slice(0,200) : null,\n          substitution_allowed: false,\n        }] : [];\n      })\n    : [];\n  if (parsedItems.length > 0) {\n    const existingOrder = Array.isArray(draft?.state?.orders) && draft.state.orders[0] ? draft.state.orders[0] : {};\n    const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];\n    const itemMap = new Map();\n    for (const item of [...existingItems, ...parsedItems]) {\n      const key = String(item?.requested_text || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();\n      if (key) itemMap.set(key, item);\n    }\n    const items = [...itemMap.values()];\n    const units = items.reduce((sum,item) => sum + Number(item?.quantity || 1), 0);\n    const shopNames = [...new Set([\n      ...(Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names : []),\n      ...items.map((item) => item?.requested_shop_name).filter(Boolean),\n    ])].slice(0,4);\n    if (items.length > 16) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_ITEM_LIMIT', 'That list has more than 16 item lines. Which items should I leave out?') }];\n    if (units > 24) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_UNIT_LIMIT', 'That list has more than 24 units. Which quantities should I reduce?') }];\n    if (shopNames.length > 3) return [{ json: final('respond_now', 'REFERENCED_LIST_OVER_SHOP_LIMIT', 'That list uses more than three shops. Which shops should I use?') }];\n    // Never silently import a customer-profile address into a new order. Only\n    // an address already present in this active draft may be retained.\n    const deliveryAddress = String(existingOrder?.delivery_address || '').trim() || null;\n    const deliveryLocation = existingOrder?.delivery_location || null;\n    const ready = Boolean(deliveryAddress || deliveryLocation);\n    const draftState = {\n      stage: ready ? 'awaiting_confirmation' : 'collecting',\n      orders: [{\n        label: existingOrder?.label || null,\n        items,\n        shop_names: shopNames,\n        delivery_address: deliveryAddress,\n        delivery_location: deliveryLocation,\n        substitution_preference: existingOrder?.substitution_preference || null,\n        requested_window: existingOrder?.requested_window || null,\n        notes: String(existingOrder?.notes || ''),\n      }],\n    };\n    const summary = items.map((item) => String(item.quantity || 1) + ' x ' + String(item.requested_text || '').trim()).join(', ');\n    const response = ready\n      ? 'Please confirm I understood your order:\\n1. ' + summary + '\\n\\nReply YES to confirm. Current price and availability will be checked by staff before payment.'\n      : 'I have kept those items together. What is the Villiers delivery address or WhatsApp location pin?';\n    return [{ json: final('respond_now', ready ? 'REFERENCED_VISIBLE_LIST_READY' : 'REFERENCED_VISIBLE_LIST_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];\n  }\n}\nconst directQuantityItem = text.match(/\\b(?:add|buy|get|order|need|want)(?:\\s+me)?\\s+(\\d+)\\s+(?:bottles?|cans?|tins?|packs?|loaves?|bars?|units?|items?)\\s+(.+?)(?:\\s+to\\s+(?:my|the)\\s+(?:shopping\\s+)?(?:request|list|order))?[\\s.!?]*$/i);\nif (allowDraftMutation && !referentialOrder && directQuantityItem) {\n  const quantity = Math.max(1, Math.min(24, Number(directQuantityItem[1])));\n  const requestedText = String(directQuantityItem[2] || '').trim().replace(/^of\\s+/i, '').slice(0,500);\n  if (requestedText) {\n    const existingOrder = Array.isArray(draft?.state?.orders) && draft.state.orders[0] ? draft.state.orders[0] : {};\n    const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];\n    const item = { requested_text: requestedText, quantity, requested_shop_name: null, substitution_allowed: false };\n    const itemMap = new Map([...existingItems, item].map((entry) => [String(entry?.requested_text || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(), entry]));\n    const items = [...itemMap.values()].filter((entry) => entry?.requested_text);\n    const deliveryAddress = String(existingOrder?.delivery_address || '').trim() || null;\n    const deliveryLocation = existingOrder?.delivery_location || null;\n    const ready = Boolean(deliveryAddress || deliveryLocation);\n    const draftState = {\n      stage: ready ? 'awaiting_confirmation' : 'collecting',\n      orders: [{\n        label: existingOrder?.label || null,\n        items,\n        shop_names: Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names.slice(0,3) : [],\n        delivery_address: deliveryAddress,\n        delivery_location: deliveryLocation,\n        substitution_preference: existingOrder?.substitution_preference || null,\n        requested_window: existingOrder?.requested_window || null,\n        notes: String(existingOrder?.notes || ''),\n      }],\n    };\n    const response = ready\n      ? 'Please confirm I understood your order:\\n1. ' + quantity + ' x ' + requestedText + '\\n\\nReply YES to confirm. Current price and availability will be checked by staff before payment.'\n      : 'I have kept ' + quantity + ' x ' + requestedText + ' in the draft. What is the Villiers delivery address or WhatsApp location pin?';\n    return [{ json: final('respond_now', ready ? 'DIRECT_QUANTITY_ITEM_READY' : 'DIRECT_QUANTITY_ITEM_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];\n  }\n}\nif (pureGreeting) {\n  return [{ json: final('light_ack', 'GREETING_ONLY', 'Hi! How can Getit help you today?') }];\n}\nif (/\\b(specials?|on special|promotions?|deals?)\\b/i.test(lower) && !allowDraftMutation && !recipeHelp && !recipeSpecialComparison) {\n  const groundedReply = cataloguePriceCurrent ? specialsText('Matching Villiers specials') : null;\n  const reply = groundedReply\n    || (cataloguePriceCurrent\n    ? \"Best depends on what you need. Browse by category or search a product to see this week's approved Villiers prices.\"\n    : catalogueCurrent\n    ? \"I can look through the Villiers catalogue, but prices and stock still need checking. What product are you looking for?\"\n    : \"I can't truthfully list current specials yet because the Villiers catalogue needs refreshing. Tell me what product you want and I'll note it for checking.\");\n  return [{ json: final('respond_now', groundedReply ? 'GROUNDED_SPECIALS_SEARCH' : 'SPECIALS_BROWSER_OFFERED', reply, { responseUi: groundedReply ? null : 'specials_menu' }) }];\n}\nif (!catalogueCurrent && /\\b(do you have|have you got|is (?:there|it|this|that)|available|in stock|stock of)\\b/i.test(lower)) {\n  return [{ json: final('respond_now', 'CATALOGUE_AVAILABILITY_REQUIRES_REVIEW', \"I can't confirm current Villiers stock because the shop catalogues need refreshing. Would you like me to note the exact item for a staff stock check?\") }];\n}\nif (/\\b(do you|does getit|can you)\\s+deliver\\b/i.test(lower) && /\\bvilliers\\b/i.test(lower)) {\n  return [{ json: final('respond_now', 'VILLIERS_DELIVERY_AREA', 'Yes, Getit delivers in Villiers. What would you like to order?') }];\n}\nif (/^(can you help (me )?(place|make|start) an order|i (want|would like|need) to (place|make|start) an order)[?.!\\s]*$/i.test(text)) {\n  return [{ json: final('respond_now', 'ORDER_START', 'Of course. What would you like to order?') }];\n}\nif (locationAnswerNeedsTownCheck) {\n  return [{ json: final('respond_now', 'VILLIERS_LOCATION_CONFIRMATION_REQUIRED', 'Is that address in Villiers? Getit is only accepting normal orders in Villiers right now.') }];\n}\nif (/^(thanks|thank you|thank you so much|shot|shweet|cool|okay thanks|ok thanks)[!.\\s]*$/i.test(text)) {\n  return [{ json: final('no_response', 'NATURAL_CONVERSATION_END') }];\n}\nconst responseSchema = {\n  type: 'object', additionalProperties: false,\n  properties: {\n    decision: { type: 'string', enum: ['respond_now','no_response','wait_for_event','light_ack','human_review'] },\n    reason_code: { type: 'string' }, confidence: { type: 'number', minimum: 0, maximum: 1 },\n    response_body: { type: ['string','null'] }, apply_draft: { type: 'boolean' },\n    draft_state: { type: ['object','null'] }, submit_draft: { type: 'boolean' },\n  },\n  required: ['decision','reason_code','confidence','response_body','apply_draft','draft_state','submit_draft'],\n};\nconst system = \"You are Getit's structured WhatsApp assistant for Villiers. Supabase and the supplied grounding object are authoritative. The recovered Getit Ordering Agent v1.6 and Launch Rules v1.1 are binding behaviour. Be warm, clever, patient, natural and concise; match the customer's language and energy when confident; understand obvious spelling mistakes; answer the actual question; ask one useful question at a time; and never make them repeat visible information. GENERAL HELP: you may answer harmless food, cooking and recipe questions helpfully. A meal idea, dish name or recipe conversation is NOT an order. Give a useful short recipe or suggestion when asked, then optionally offer to turn its ingredients into a Getit shopping request. Do not pivot an availability or order question into an unsolicited recipe. When safety_flags.recipeSpecialComparison is true, do not repeat or rewrite the recipe: compare its visible ingredient names with grounding.matches and mention only direct ingredient matches that have price_kind=special, price_verified=true and reference_only=false; ignore every unrelated match even if it has a price. Never set apply_draft during recipe/general conversation unless safety_flags.allow_draft_mutation is true and the customer clearly asked to order. ORDER INTENT: do not create or change a draft merely because food or a product is mentioned. Only mutate a draft when safety_flags.allow_draft_mutation is true. When the customer clearly asks to add, buy, get or order an item and allow_draft_mutation is true, you MUST set apply_draft=true, preserve the exact requested item and quantity in a collecting draft, and ask for any missing address or shop detail afterward; a missing address is not a reason to skip the draft. Never silently copy customer.default_address into a new order: a saved address is operator context only and must be supplied or explicitly confirmed in the active conversation before use. Never say added, on the list, in your order, booked, submitted or confirmed unless the matching draft mutation or real submission is being persisted. For unlisted goods preserve the customer's exact wording and say price and availability are pending. CATALOGUE: catalogue matches are hints, not proof. If active_public_rows is zero, never claim Getit currently has a product, price, special or stock. You may quote an effective_price only when that exact match has price_verified=true and reference_only=false; say when an operator-approved temporary price is valid through. Never quote any price from reference_only matches. Stock is never confirmed unless stock_verified=true, even when a price is approved. SERVICE AREA: normal launch orders are Villiers only. Any outside-area request is human_review; never accept an outside address or promise delivery there. GREETING: greet only when the current message itself is a greeting; otherwise never reopen with hi/hello/welcome or the customer's name. FORMAT: plain WhatsApp text, usually 1-4 short sentences under 600 characters; no corporate filler. Never invent a price, promotion, stock, availability, ETA, payment result, order number, status, action or successful order change. Preserve the existing draft and verified customer/order facts. Keep separate orders, addresses, shops, fees, totals and statuses separate. Limits per order: 16 item lines, 24 physical units, 1-3 shops. Fees are R35 for one shop up to 16 units, R50 for one shop with 17-24 units, and R65 for two or three shops up to 24 units, but no final total while goods prices are pending. Restricted goods, safety, disputes, refunds, payment ambiguity, direct human requests, outside Villiers, or low confidence are human_review. Use respond_now/light_ack only with a useful safe response_body; no_response/wait_for_event/human_review require null response_body. Draft state is {stage,orders}; allowed stages: idle, collecting, awaiting_confirmation, cancelled. Each order may contain label, items, shop_names, delivery_address, delivery_location, substitution_preference, requested_window, notes. Each item contains requested_text, quantity, requested_shop_name, substitution_allowed. Do not add backend-owned facts. Always submit_draft=false; confirmations are deterministic. Material changes reset confirmation. When complete, set awaiting_confirmation and summarize clearly with PRICE PENDING where needed. Output only the required JSON.\";\nconst recipeGuidance = \" RECIPE EXPERIENCE: When recipe_help is true and the customer named a dish, give a genuinely useful WhatsApp recipe rather than one compressed paragraph. Keep it under 1400 characters and use this readable structure: dish title; Serves; Ingredients with dash bullets; Method with numbered steps; one practical Tip; then exactly one relevant cooking question about portions, heat level, dietary needs, available ingredients or equipment. Use affordable, commonly available South African ingredients and mention a sensible substitution when helpful, but never claim Getit or a shop has them. If the request is broad, such as what should we make for dinner, ask one focused preference question first instead of guessing. Do not append a sales or ordering question to every recipe. Only offer to turn ingredients into a shopping request after the cooking need has been answered, and never more than one question in the reply.\";\nconst fullSystem = system.replace('Output only the required JSON.', recipeGuidance + ' Output only the required JSON.');\nconst safetyFlags = { recipeHelp, recipeSpecialComparison, allowDraftMutation, knownOutsideArea: false, catalogueCurrent, cataloguePriceCurrent };\nconst user = { current_message: { text, type: source.messageType, payload: source.payload }, safety_flags: safetyFlags, grounding, context };\nreturn [{ json: {\n  ...source, context, grounding, safetyFlags, requiresModel: true,\n  ollamaRequest: {\n    model: 'qwen3.5:4b', stream: false, think: false, format: responseSchema,\n    keep_alive: '30m',\n    options: { temperature: 0, seed: 42, num_ctx: 8192, num_predict: 1000 },\n    messages: [{ role: 'system', content: fullSystem }, { role: 'user', content: JSON.stringify(user) }],\n  },\n} }];"
+      },
+      "id": "build-safety-decision",
+      "name": "Build Safety Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/meta-whatsapp-presence",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id:$json.providerMessageId, typing_indicator:$json.requiresModel }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "mark-read-and-show-ai-typing",
+      "name": "Mark Read and Show AI Typing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1510,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: $('Build Safety Decision').item.json }];"
+      },
+      "id": "restore-safety-decision",
+      "name": "Restore Safety Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.requiresModel }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "model-required",
+      "name": "Model Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1990,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/chat",
+        "authentication": "none",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ollamaRequest) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "ask-local-structured-model",
+      "name": "Ask Local Structured Model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2250,
+        -520
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Build Safety Decision').item.json;\nconst raw = $json?.message?.content ?? $json?.response ?? '';\nlet parsed = null;\ntry { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}\nconst safety = source?.safetyFlags || {};\nconst context = source?.context || {};\nconst currentText = String(source?.body || '').toLowerCase();\nconst recentMessages = Array.isArray(context?.recent_messages) ? context.recent_messages : [];\nconst currentDraftOrders = Array.isArray(context?.order_draft?.state?.orders) ? context.order_draft.state.orders : [];\nconst currentDraftItems = currentDraftOrders.flatMap((order) => Array.isArray(order?.items) ? order.items : []);\nconst normalise = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();\nconst normalisedCurrentText = normalise(currentText);\nconst recentVisibleText = normalise(recentMessages.slice(-10).map((message) => message?.body || '').join(' '));\nconst recentInboundText = normalise(recentMessages.slice(-10).filter((message) => message?.direction === 'inbound').map((message) => message?.body || '').join(' '));\nconst referentialOrder = /\\b(them|those|these|the items|all(?: of)? (?:them|it)|everything|ingredien\\w*|same)\\b/i.test(currentText);\nconst existingItemKeys = new Set(currentDraftItems.map((item) => normalise(item?.requested_text)));\nconst existingAddressKeys = new Set(currentDraftOrders.map((order) => normalise(order?.delivery_address)).filter(Boolean));\nconst messageTokens = new Set(normalise(currentText).split(/\\s+/).filter((token) => token.length >= 3));\nconst decisions = new Set(['respond_now','no_response','wait_for_event','light_ack','human_review']);\nlet valid = parsed && decisions.has(parsed.decision) && typeof parsed.reason_code === 'string' && Number.isFinite(Number(parsed.confidence));\nlet decision = valid ? parsed.decision : 'human_review';\nlet reasonCode = valid ? parsed.reason_code.slice(0,100) : 'MODEL_OUTPUT_INVALID';\nlet confidence = valid ? Math.max(0,Math.min(1,Number(parsed.confidence))) : 0;\nlet responseBody = typeof parsed?.response_body === 'string' ? parsed.response_body.trim().slice(0,12000) : null;\nlet applyDraft = parsed?.apply_draft === true;\nlet submitDraft = false;\nlet draftState = applyDraft && parsed?.draft_state && typeof parsed.draft_state === 'object' ? parsed.draft_state : null;\nif (confidence < 0.65) { decision='human_review'; reasonCode='LOW_MODEL_CONFIDENCE'; responseBody=null; applyDraft=false; submitDraft=false; draftState=null; }\nif (['no_response','wait_for_event','human_review'].includes(decision)) responseBody=null;\nif (responseBody) {\n  responseBody = responseBody.replace(/^(hi|hello|hey|hallo|good (morning|afternoon|evening))(\\s+[A-Za-z'-]+)?[\\s,!?.-]*/i, '').trim();\n}\nconst orderSubmissionClaim = responseBody && /\\b(?:order (?:is |has been )?confirmed|your order is confirmed|prices? and stock (?:are|is) final(?:ised|ized)|order (?:was |has been )?submitted|sent (?:your |the )?order)\\b/i.test(responseBody);\nif (orderSubmissionClaim && !submitDraft) {\n  decision='respond_now';\n  reasonCode='ORDER_NOT_SUBMITTED';\n  responseBody='I have not submitted the order yet. Please check the draft above and reply YES to confirm. Current price and availability will still be checked before payment.';\n  applyDraft=false;\n  submitDraft=false;\n  draftState=null;\n  valid=true;\n}\nif (responseBody && safety.recipeHelp !== true) {\n  responseBody = responseBody.replace(/(?:\\r?\\n\\s*)*Would you like[^?]*(?:recipe|cook)[^?]*\\?\\s*$/i, '').trim();\n}\nif (safety.recipeHelp === true) {\n  applyDraft=false;\n  submitDraft=false;\n  draftState=null;\n  if (responseBody && ['respond_now','light_ack'].includes(decision)) {\n    let formatted = responseBody\n      .replace(/\\u2022/g, '-')\n      .replace(/Ingredients\\s*\\([^\\n:]*\\)\\s*:/i, 'Ingredients:')\n      .replace(/;\\s*Serves\\s*:?\\s*/i, '\\nServes: ')\n      .replace(/;\\s*Ingredients\\s*:\\s*/i, '\\n\\nIngredients:\\n')\n      .replace(/;\\s*Method\\s*:\\s*/i, '\\n\\nMethod:\\n')\n      .replace(/;\\s*Tip\\s*:\\s*/i, '\\n\\nTip: ')\n      .replace(/;\\s*(?=\\r?\\n|$)/g, '')\n      .replace(/\\r/g, '')\n      .trim();\n    formatted = formatted\n      .replace(/\\n?\\s*(Would you like|Want me to|Should I)[^?]*\\?\\s*$/i, '')\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .trim();\n    const ingredientBlock = formatted.match(/Ingredients:\\s*([\\s\\S]*?)\\s*\\n+Method:/i);\n    if (ingredientBlock && !/(^|\\n)\\s*-\\s+/.test(ingredientBlock[1])) {\n      const ingredients = ingredientBlock[1].split(/,\\s*/).map((item) => item.trim()).filter(Boolean);\n      if (ingredients.length > 1) {\n        formatted = formatted.replace(ingredientBlock[0], 'Ingredients:\\n' + ingredients.map((item) => '- ' + item.replace(/[.;]+$/, '')).join('\\n') + '\\n\\nMethod:');\n      }\n    }\n    const methodBlock = formatted.match(/Method:\\s*([\\s\\S]*?)(?=\\n+Tip:|$)/i);\n    if (methodBlock && !/(^|\\n)\\s*\\d+\\.\\s+/.test(methodBlock[1])) {\n      const steps = methodBlock[1].split(/\\.\\s+|\\n+/).map((step) => step.trim()).filter(Boolean);\n      if (steps.length > 1) {\n        formatted = formatted.replace(methodBlock[0], 'Method:\\n' + steps.map((step,index) => String(index + 1) + '. ' + step.replace(/[.;]+$/, '') + '.').join('\\n'));\n      }\n    }\n    const portionsKnown = /\\b(\\d+|one|two|three|four|five|six)\\s+(people|persons|servings?)\\b/i.test(String(source.body || ''));\n    const cookingQuestion = portionsKnown\n      ? 'Do you prefer it mild, spicy, creamy or lighter?'\n      : 'How many people are you cooking for, and is there anything you do not eat?';\n    responseBody = formatted.slice(0,1250).trimEnd() + '\\n\\nQuick question: ' + cookingQuestion;\n  }\n  if (decision === 'human_review' && responseBody) responseBody=null;\n}\nif (applyDraft && safety.allowDraftMutation !== true) {\n  valid=false;\n  decision='human_review';\n  reasonCode='ORDER_INTENT_NOT_EXPLICIT';\n  responseBody=null;\n  applyDraft=false;\n  submitDraft=false;\n  draftState=null;\n}\nif (applyDraft) {\n  const draftIssues = [];\n  const sanitiseOptionalText = (value) => typeof value === 'string' && value.trim() ? value.trim().slice(0,500) : null;\n  const rawOrders = Array.isArray(draftState?.orders) ? draftState.orders : [];\n  draftState = {\n    stage: String(draftState?.stage || 'collecting'),\n    orders: rawOrders.map((order) => ({\n      label: sanitiseOptionalText(order?.label),\n      items: (Array.isArray(order?.items) ? order.items : []).map((item) => ({\n        requested_text: String(item?.requested_text || '').trim().slice(0,500),\n        quantity: Number(item?.quantity || 1),\n        requested_shop_name: sanitiseOptionalText(item?.requested_shop_name),\n        substitution_allowed: item?.substitution_allowed === true,\n      })),\n      shop_names: (Array.isArray(order?.shop_names) ? order.shop_names : []).map((shop) => String(shop || '').trim()).filter(Boolean).slice(0,3),\n      delivery_address: sanitiseOptionalText(order?.delivery_address),\n      delivery_location: order?.delivery_location && Number.isFinite(Number(order.delivery_location.latitude)) && Number.isFinite(Number(order.delivery_location.longitude))\n        ? { latitude: Number(order.delivery_location.latitude), longitude: Number(order.delivery_location.longitude) }\n        : null,\n      substitution_preference: sanitiseOptionalText(order?.substitution_preference),\n      requested_window: sanitiseOptionalText(order?.requested_window),\n      notes: sanitiseOptionalText(order?.notes) || '',\n    })),\n  };\n  const allowedStages = new Set(['idle','collecting','awaiting_confirmation','cancelled']);\n  const orders = Array.isArray(draftState?.orders) ? draftState.orders : [];\n  if (!allowedStages.has(draftState?.stage)) { valid=false; draftIssues.push('invalid_stage'); }\n  if (orders.length > 5) { valid=false; draftIssues.push('too_many_orders'); }\n  if (!['idle','cancelled'].includes(draftState?.stage) && orders.length < 1) { valid=false; draftIssues.push('missing_order'); }\n  for (const order of orders) {\n    const items = Array.isArray(order?.items) ? order.items : [];\n    const units = items.reduce((sum,item)=>sum+Number(item?.quantity||1),0);\n    const shops = new Set([...(Array.isArray(order?.shop_names)?order.shop_names:[]),...items.map(item=>item?.requested_shop_name).filter(Boolean)]);\n    if (items.length > 16) { valid=false; draftIssues.push('too_many_item_lines'); }\n    if (units > 24) { valid=false; draftIssues.push('too_many_units'); }\n    if (shops.size > 3) { valid=false; draftIssues.push('too_many_shops'); }\n    if (items.some(item=>!String(item?.requested_text||'').trim() || !Number.isInteger(Number(item?.quantity||1)) || Number(item?.quantity||1)<1)) { valid=false; draftIssues.push('invalid_item'); }\n    for (const item of items) {\n      const itemKey = normalise(item?.requested_text);\n      if (existingItemKeys.has(itemKey)) continue;\n      const itemTokens = itemKey.split(/\\s+/).filter((token) => token.length >= 3);\n      const groundedInMessage = normalisedCurrentText.includes(itemKey) || itemTokens.some((token) => messageTokens.has(token));\n      const groundedByReference = referentialOrder && recentVisibleText.includes(itemKey);\n      if (!groundedInMessage && !groundedByReference) { valid=false; draftIssues.push('item_not_in_visible_chat'); }\n    }\n    const address = normalise(order?.delivery_address);\n    const addressGroundedInActiveOrder = !address\n      || existingAddressKeys.has(address)\n      || normalisedCurrentText.includes(address)\n      || recentInboundText.includes(address);\n    if (address && !addressGroundedInActiveOrder) { valid=false; draftIssues.push('unverified_address'); }\n    if (address && !/\\bvilliers\\b/i.test(String(order?.delivery_address || '')) && !normalisedCurrentText.includes('villiers') && !recentInboundText.includes('villiers')) { valid=false; draftIssues.push('unverified_address'); }\n  }\n  if (source.messageType === 'location' && orders.length) {\n    const latitude = Number(source.payload?.message?.location?.latitude);\n    const longitude = Number(source.payload?.message?.location?.longitude);\n    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {\n      const target = orders.find((order) => !order?.delivery_location) || orders[0];\n      target.delivery_location = { latitude, longitude };\n    }\n  }\n  const allOrdersReady = orders.length > 0 && orders.every((order) => {\n    const items = Array.isArray(order?.items) ? order.items : [];\n    return items.length > 0 && (Boolean(order?.delivery_address) || Boolean(order?.delivery_location));\n  });\n  if (valid && allOrdersReady && draftState.stage === 'collecting') draftState.stage = 'awaiting_confirmation';\n  if (!valid) {\n    const issue = draftIssues[0] || 'unsafe_draft_change';\n    decision='respond_now';\n    reasonCode='DRAFT_CLARIFICATION_REQUIRED';\n    responseBody = issue === 'too_many_item_lines'\n      ? 'That order is over the 16-item-line limit. Which items should I leave out?'\n      : issue === 'too_many_units'\n      ? 'That order is over the 24-unit limit. Which quantities should I reduce?'\n      : issue === 'too_many_shops'\n      ? 'That order uses more than three shops. Which shops should I use?'\n      : issue === 'unverified_address'\n      ? 'I need to confirm the delivery address is in Villiers before adding it. What is the Villiers address or WhatsApp location pin?'\n      : 'I could not safely tell which earlier items you meant. Please reply to the exact item list or send the item names once, and I will keep them together.';\n    applyDraft=false;\n    submitDraft=false;\n    draftState=null;\n    valid=true;\n  }\n}\nif (valid && applyDraft && draftState?.stage === 'awaiting_confirmation' && decision === 'respond_now') {\n  const orders = Array.isArray(draftState.orders) ? draftState.orders : [];\n  const summary = orders.map((order,index) => {\n    const items = Array.isArray(order?.items) ? order.items : [];\n    const itemText = items.map((item) => String(item.quantity || 1) + ' x ' + String(item.requested_text || '').trim()).join(', ');\n    const destination = order?.delivery_address ? ' - delivery: ' + String(order.delivery_address).trim() : '';\n    return String(index + 1) + '. ' + itemText + destination;\n  }).join('\\n');\n  responseBody = 'Please confirm I understood your ' + (orders.length === 1 ? 'order' : 'separate orders') + ':\\n' + summary + '\\n\\nReply YES to confirm. Current price and availability will be checked by staff before payment.';\n  reasonCode = 'ORDER_DRAFT_READY_FOR_CONFIRMATION';\n}\nif (['respond_now','light_ack'].includes(decision) && !responseBody) { decision='human_review'; reasonCode='MISSING_SAFE_RESPONSE'; applyDraft=false; submitDraft=false; }\nconst orderMutationClaim = responseBody && /\\b(added|add(?:ed)? to (?:the|your) (?:list|order)|on (?:the|your) list|in your order|order now includes|booked|order confirmed)\\b/i.test(responseBody);\nif (orderMutationClaim && !applyDraft) {\n  decision='human_review';\n  reasonCode='FALSE_ORDER_MUTATION_CLAIM';\n  responseBody=null;\n  applyDraft=false;\n  submitDraft=false;\n  draftState=null;\n  valid=false;\n}\nconst deniedAvailability = responseBody && /\\b(can'?t|cannot|unable to|do not|don't)\\b[^.!?]{0,80}\\b(confirm|verify|know|claim)\\b[^.!?]{0,80}\\b(available|in stock)\\b/i.test(responseBody);\nconst riskyClaim = responseBody && (\n  /(R\\s?\\d|fresh specials?|discounted|on special|sale price|payment (received|successful|paid)|order\\s*(number|#)|deliver(?:y|ed) (by|in \\d)|deliver(?:y|ed|ing)?[^.!?]{0,35}(cape town|johannesburg|joburg|pretoria|durban|bloemfontein)|I (will|'ll) (now )?(verify|check|confirm|send|process))/i.test(responseBody)\n  || (!deniedAvailability && /\\b(in stock|available (now|today))\\b/i.test(responseBody))\n);\nif (riskyClaim) { decision='human_review'; reasonCode='UNVERIFIED_FACTUAL_CLAIM'; responseBody=null; applyDraft=false; submitDraft=false; draftState=null; valid=false; }\nreturn [{ json: {\n  ...source, decision, reasonCode, confidence, responseBody, applyDraft, submitDraft, draftState,\n  schemaValid: Boolean(valid), factsValid: Boolean(valid && !riskyClaim), modelName: 'qwen3.5:4b',\n  modelDigest: 'qwen3.5:4b-local-structured-v1-20-0-atomic-orders', rawOutput: parsed,\n  responseUi: source.responseUi || null,\n} }];"
+      },
+      "id": "validate-model-decision",
+      "name": "Validate Model Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2510,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst data = $input.first().json;\nreturn [{ json: data }];"
+      },
+      "id": "finalize-deterministic-decision",
+      "name": "Finalize Deterministic Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.submitDraft ? \"submit\" : $json.applyDraft ? \"replace\" : \"none\" }}",
+                    "rightValue": "submit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Submit confirmed draft"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.submitDraft ? \"submit\" : $json.applyDraft ? \"replace\" : \"none\" }}",
+                    "rightValue": "replace",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Replace draft"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Fallback"
+        }
+      },
+      "id": "route-draft-action",
+      "name": "Route Draft Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2300,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/confirm_and_submit_messaging_order_draft_v1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_conversation_id: $(\"Route Draft Action\").item.json.conversationId, p_expected_version: $(\"Route Draft Action\").item.json.context.order_draft.version, p_confirmation_message_id: $(\"Route Draft Action\").item.json.messageId }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "submit-confirmed-draft",
+      "name": "Submit Confirmed Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2560,
+        -540
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/replace_messaging_order_draft_state",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_conversation_id: $(\"Route Draft Action\").item.json.conversationId, p_expected_version: $(\"Route Draft Action\").item.json.context.order_draft.version, p_state: $(\"Route Draft Action\").item.json.draftState, p_source_message_id: $(\"Route Draft Action\").item.json.messageId }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "replace-draft-state",
+      "name": "Replace Draft State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2560,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/record_messaging_decision",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const d=$(\"Route Draft Action\").item.json; return JSON.stringify({ p_event_id:d.eventId, p_decision:d.decision, p_reason_code:d.reasonCode, p_prompt_version:\"getit-production-structured-v1-20-0\", p_confidence:d.confidence, p_facts:{ conversation_mode:d.context?.conversation?.mode, message_type:d.messageType, draft_updated:d.applyDraft, draft_submitted:d.submitDraft, partner_application:d.partnerHandled||false, partner_flow_kind:d.partnerFlowKind||null, response_ui:d.responseUi||null, recipe_help:d.safetyFlags?.recipeHelp===true, explicit_order_intent:d.safetyFlags?.allowDraftMutation===true, catalogue_current:d.safetyFlags?.catalogueCurrent===true, catalogue_price_current:d.safetyFlags?.cataloguePriceCurrent===true, dry_run:d.context?.conversation?.mode===\"dry_run\" }, p_model_name:d.modelName, p_model_digest:d.modelDigest, p_raw_output:d.rawOutput, p_schema_valid:d.schemaValid, p_facts_valid:d.factsValid, p_is_final:true }); })() }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "record-final-decision",
+      "name": "Record Final Decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2820,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nreturn [{ json: $('Route Draft Action').item.json }];"
+      },
+      "id": "restore-recorded-decision",
+      "name": "Restore Recorded Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ [\"respond_now\",\"light_ack\"].includes($json.decision) && Boolean($json.responseBody) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "queue-customer-response",
+      "name": "Queue Customer Response?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3340,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/queue_decision_response_v4",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_event_id:$json.eventId, p_idempotency_key:\"decision:\" + ($json.eventKey || $json.eventId) + \":v1-20\", p_body:$json.responseBody, p_payload:{ origin:\"getit-production-inbound-v1-20\", draft_updated:$json.applyDraft, draft_submitted:$json.submitDraft, partner_application:$json.partnerHandled||false, flow_kind:$json.partnerFlowKind||null, response_ui:$json.responseUi||null, grounded:true }, p_offer_welcome_menu:true, p_max_attempts:5 }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "queue-decision-response",
+      "name": "Queue Decision Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3600,
+        -500
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/finish_messaging_event",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_event_id:$(\"Restore Recorded Decision\").item.json.eventId, p_lock_token:$(\"Restore Recorded Decision\").item.json.lockToken, p_outcome:\"processed\", p_retry_after_seconds:0, p_error_code:null, p_error_detail:null }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "finish_result"
+            }
+          }
+        }
+      },
+      "id": "finish-inbound-event",
+      "name": "Finish Inbound Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3860,
+        -360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/apply_messaging_delivery_status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_provider:$json.provider, p_provider_message_id:$json.providerMessageId, p_status:$json.status, p_provider_timestamp:$json.providerTimestamp ? new Date(Number($json.providerTimestamp)*1000).toISOString() : null, p_error_code:$json.errors?.[0]?.code ? String($json.errors[0].code) : null, p_error_detail:$json.errors?.[0]?.title || null, p_payload:$json.payload }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "status_raw"
+            }
+          }
+        }
+      },
+      "id": "apply-delivery-status",
+      "name": "Apply Delivery Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -300,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst source = $('Normalize Meta Events').item.json;\nconst raw = $input.first().json.status_raw;\nlet result; try { result = JSON.parse(raw); } catch { result = raw; }\nconst processed = ['applied','duplicate','stale'].includes(result);\nreturn [{ json: {\n  ...source, finishOutcome: processed ? 'processed' : result === 'not_found' ? 'retry' : 'quarantined',\n  retryAfter: result === 'not_found' ? 15 : 0,\n  finishErrorCode: processed ? null : 'STATUS_' + String(result).toUpperCase(),\n  finishErrorDetail: processed ? null : 'Delivery status result: ' + result,\n} }];"
+      },
+      "id": "classify-delivery-status",
+      "name": "Classify Delivery Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/finish_messaging_event",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_event_id:$json.eventId, p_lock_token:$json.lockToken, p_outcome:$json.finishOutcome, p_retry_after_seconds:$json.retryAfter, p_error_code:$json.finishErrorCode, p_error_detail:$json.finishErrorDetail }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "finish_result"
+            }
+          }
+        }
+      },
+      "id": "finish-status-event",
+      "name": "Finish Status Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        220,
+        20
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/finish_messaging_event",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_event_id:$json.eventId, p_lock_token:$json.lockToken, p_outcome:\"quarantined\", p_retry_after_seconds:0, p_error_code:$json.errorCode, p_error_detail:$json.errorDetail }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text",
+              "outputPropertyName": "finish_result"
+            }
+          }
+        }
+      },
+      "id": "finish-quarantined-event",
+      "name": "Finish Quarantined Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -40,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "q4ozFODidcOtHk7Y",
+          "name": "Getit Supabase Secret Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nreturn $input.all().map((item) => ({ json: {\n  ...item.json, kind: 'quarantine', errorCode: 'UNEXPECTED_WORKFLOW_ROUTE',\n  errorDetail: 'The normalized event reached an unexpected workflow route.',\n} }));"
+      },
+      "id": "make-fallback-quarantine",
+      "name": "Make Fallback Quarantine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Every Second": {
+      "main": [
+        [
+          {
+            "node": "Claim Messaging Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Inbound Worker": {
+      "main": [
+        [
+          {
+            "node": "Claim Messaging Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Messaging Events": {
+      "main": [
+        [
+          {
+            "node": "Normalize Meta Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Meta Events": {
+      "main": [
+        [
+          {
+            "node": "Route Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Event": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply Delivery Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finish Quarantined Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Make Fallback Quarantine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversation": {
+      "main": [
+        [
+          {
+            "node": "Attach Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Conversation": {
+      "main": [
+        [
+          {
+            "node": "Upsert Customer Identity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Customer Identity": {
+      "main": [
+        [
+          {
+            "node": "Persist Inbound Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Inbound Message": {
+      "main": [
+        [
+          {
+            "node": "Attach Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Message": {
+      "main": [
+        [
+          {
+            "node": "Process Partner Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Partner Application": {
+      "main": [
+        [
+          {
+            "node": "Attach Partner Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Partner Application": {
+      "main": [
+        [
+          {
+            "node": "Fetch Messaging Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Messaging Context": {
+      "main": [
+        [
+          {
+            "node": "Fetch Messaging Grounding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Messaging Grounding": {
+      "main": [
+        [
+          {
+            "node": "Build Safety Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Safety Decision": {
+      "main": [
+        [
+          {
+            "node": "Mark Read and Show AI Typing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Read and Show AI Typing": {
+      "main": [
+        [
+          {
+            "node": "Restore Safety Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Safety Decision": {
+      "main": [
+        [
+          {
+            "node": "Model Required?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Model Required?": {
+      "main": [
+        [
+          {
+            "node": "Ask Local Structured Model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize Deterministic Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Local Structured Model": {
+      "main": [
+        [
+          {
+            "node": "Validate Model Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Model Decision": {
+      "main": [
+        [
+          {
+            "node": "Route Draft Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Deterministic Decision": {
+      "main": [
+        [
+          {
+            "node": "Route Draft Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Draft Action": {
+      "main": [
+        [
+          {
+            "node": "Submit Confirmed Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replace Draft State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Final Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Confirmed Draft": {
+      "main": [
+        [
+          {
+            "node": "Record Final Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Draft State": {
+      "main": [
+        [
+          {
+            "node": "Record Final Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Final Decision": {
+      "main": [
+        [
+          {
+            "node": "Restore Recorded Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Recorded Decision": {
+      "main": [
+        [
+          {
+            "node": "Queue Customer Response?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Customer Response?": {
+      "main": [
+        [
+          {
+            "node": "Queue Decision Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finish Inbound Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Decision Response": {
+      "main": [
+        [
+          {
+            "node": "Finish Inbound Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Delivery Status": {
+      "main": [
+        [
+          {
+            "node": "Classify Delivery Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Delivery Status": {
+      "main": [
+        [
+          {
+            "node": "Finish Status Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make Fallback Quarantine": {
+      "main": [
+        [
+          {
+            "node": "Finish Quarantined Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 120,
+    "saveManualExecutions": true,
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "getitBoundary": "production-persist-decide-draft-partner-queue"
+  },
+  "tags": []
+}

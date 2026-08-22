@@ -6,11 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "vercel-build": "next build"
+    "vercel-build": "next build",
+    "workflows:build": "node n8n/tools/build-production-messaging-workflows.mjs n8n/workflows",
+    "workflows:validate": "node n8n/tools/validate-production-workflows.mjs n8n/workflows",
+    "test:workflows": "pnpm workflows:build && pnpm workflows:validate",
+    "test:decisions": "node n8n/tools/test-grounded-decision-regressions.mjs",
+    "test:ci": "pnpm test:workflows && pnpm build"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",
-    "next": "16.2.11",
+    "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "leaflet": "1.9.4"

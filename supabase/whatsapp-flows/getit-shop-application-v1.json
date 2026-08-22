@@ -1,0 +1,81 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "SHOP_APPLICATION",
+      "title": "Getit - Add a shop",
+      "terminal": true,
+      "success": true,
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Add your shop to Getit"
+          },
+          {
+            "type": "TextBody",
+            "text": "Tell us about your Villiers shop. Your application will go to the Getit team for review."
+          },
+          {
+            "type": "Form",
+            "name": "form",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "applicant_name",
+                "label": "Your full name",
+                "input-type": "text",
+                "required": true,
+                "max-chars": 100
+              },
+              {
+                "type": "TextInput",
+                "name": "business_name",
+                "label": "Shop name",
+                "input-type": "text",
+                "required": true,
+                "max-chars": 120
+              },
+              {
+                "type": "TextArea",
+                "name": "business_type",
+                "label": "What does it sell?",
+                "helper-text": "Example: groceries, takeaway food, clothing or hardware",
+                "required": true,
+                "max-length": 300
+              },
+              {
+                "type": "TextArea",
+                "name": "location_text",
+                "label": "Villiers address",
+                "helper-text": "Type the shop's full street address",
+                "required": true,
+                "max-length": 500
+              },
+              {
+                "type": "TextCaption",
+                "text": "Submitting sends this application to Getit for review. It does not make the shop live. Privacy: awaldstudio.com/getit-privacy-policy"
+              },
+              {
+                "type": "Footer",
+                "label": "Send to Getit",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "application_type": "shop",
+                    "applicant_name": "${form.applicant_name}",
+                    "business_name": "${form.business_name}",
+                    "business_type": "${form.business_type}",
+                    "location_text": "${form.location_text}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
