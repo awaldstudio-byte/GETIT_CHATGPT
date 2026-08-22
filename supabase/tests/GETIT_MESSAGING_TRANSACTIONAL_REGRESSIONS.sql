@@ -10,7 +10,29 @@ declare
   v_fee numeric;
   v_order_count integer;
   v_review_count integer;
+  v_match_count integer;
 begin
+  -- Specific real-catalogue requests may be linked for staff review, but an
+  -- ambiguous request without a shop must remain unlinked.
+  select count(*) into v_match_count
+  from private.resolve_messaging_catalogue_item_v1(
+    'KOO Baked Beans 400g',
+    'OK Villiers'
+  ) match
+  join public.products product on product.id = match.product_id
+  where product.brand = 'KOO'
+    and product.size = '400 g'
+    and match.shop_name = 'OK Villiers';
+  if v_match_count <> 1 then
+    raise exception 'SPECIFIC_CATALOGUE_MATCH_ASSERTION_FAILED';
+  end if;
+
+  select count(*) into v_match_count
+  from private.resolve_messaging_catalogue_item_v1('baked beans', null);
+  if v_match_count <> 0 then
+    raise exception 'AMBIGUOUS_CATALOGUE_MATCH_WAS_LINKED';
+  end if;
+
   -- A geographically invalid pin must be rejected by the database even if an
   -- alternate workflow claims the delivery area is Villiers.
   begin

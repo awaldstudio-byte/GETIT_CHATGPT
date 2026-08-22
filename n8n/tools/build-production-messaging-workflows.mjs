@@ -274,14 +274,19 @@ const specialsText = (heading) => {
 };
 const pureGreeting = /^(hi|hello|hey|hallo|good (morning|afternoon|evening))(\s+(there|getit))?[\s.!?,]*$/i.test(text);
 const recipeWords = /\b(recipe|recipes|cook|cooking|meal idea|dinner idea|lunch idea|breakfast idea|what (?:can|should|are) (?:i|we) (?:make|cook)|what are we making|ingredients for)\b/i;
-const explicitOrderWords = /\b(place|start|make) (?:an? )?order\b|\b(order|buy|purchase|add)\b|\b(get|bring|deliver) me\b|\b(i need|i want|i'd like|i would like|please get|can you get|shopping list)\b/i;
+const explicitOrderWords = /\b(place|start|make) (?:an? )?order\b|\b(order|buy|purchase|add)\b|\b(?:please|pls)\s+ad(?:d)?\b|\bad\s+\d+\s+(?:bottles?|cans?|tins?|packs?|loaf|loaves|bars?|units?|items?)\b|\b(get|bring|deliver) me\b|\b(i need|i want|i'd like|i would like|please get|can you get|shopping list)\b/i;
 const priorFoodConversation = recent.slice(-8).some((message) => recipeWords.test(String(message?.body || '')));
 const explicitOrderIntent = explicitOrderWords.test(text);
+const activeDraft = ['collecting','awaiting_confirmation'].includes(String(draft?.state?.stage || ''));
+const typedVilliersAddress = activeDraft
+  && source.messageType === 'text'
+  && /\bvilliers\b/i.test(text)
+  && (/\d/.test(text) || /\b(street|st|road|rd|avenue|ave|lane|ln|drive|dr|place|farm|plot|house)\b/i.test(text));
 const recipeSpecialComparison = priorFoodConversation
   && /\b(specials?|on special|promotions?|deals?)\b/i.test(text)
   && /\b(recipe|ingredients|them|those|these|everything)\b/i.test(text);
-const recipeHelp = !explicitOrderIntent && !recipeSpecialComparison && (recipeWords.test(text) || priorFoodConversation);
-const activeDraft = ['collecting','awaiting_confirmation'].includes(String(draft?.state?.stage || ''));
+const recipeHelp = !explicitOrderIntent && !recipeSpecialComparison && !typedVilliersAddress
+  && (recipeWords.test(text) || (priorFoodConversation && !activeDraft));
 const orderButton = source.interactiveReplyId === 'getit_order_groceries' || /^order groceries$/i.test(text);
 const latestOutbound = [...recent].reverse().find((message) => message?.direction === 'outbound');
 const latestVisibleList = [...recent].reverse().find((message) => {
@@ -340,6 +345,18 @@ if (source.messageType === 'reaction') return [{ json: final('no_response', 'REA
 if (/\b(stop|unsubscribe|opt\s*out|do not message|moenie.*boodskap)\b/i.test(lower)) {
   return [{ json: final('no_response', 'CUSTOMER_OPT_OUT') }];
 }
+const cancelDraftIntent = /^(?:please\s+)?(?:cancel|delete|clear|discard)(?:\s+(?:that|this|my|the))?\s+(?:draft|order)[\s.!?]*$/i.test(text)
+  || /^(?:never\s*mind|nevermind)(?:,?\s*(?:cancel|delete|clear|discard)(?:\s+(?:that|this|my|the))?\s+(?:draft|order))?[\s.!?]*$/i.test(text);
+if (activeDraft && cancelDraftIntent) {
+  return [{ json: final('respond_now', 'DRAFT_CANCELLED', 'Okay, I cancelled that draft. No order was submitted.', {
+    applyDraft: true,
+    draftState: { stage: 'cancelled', orders: [] },
+  }) }];
+}
+const confirmationIntent = /^(?:yes(?: please)?|confirm(?:ed)?|correct|(?:that(?:['’]s| is)|this is) correct|that(?:['’]s| is) right|looks right|exactly|go ahead|ja|reg so)[\s.!?]*$/i.test(text);
+if (draft?.state?.stage === 'cancelled' && confirmationIntent) {
+  return [{ json: final('respond_now', 'NO_ACTIVE_DRAFT_TO_CONFIRM', 'There is no active draft to confirm. Tell me what you would like to order and I will start a new one.') }];
+}
 const businessRisk = /\b(refund|charged|chargeback|fraud|id number|identity number|unsafe|danger|threat|injur|emergency|medicine|prescription|alcohol|cigarette|tobacco)\b/i.test(lower);
 const credentialRisk = /\b(otp|password)\b/i.test(lower) || (source.messageType !== 'location' && /\bpin\b/i.test(lower));
 if (businessRisk || credentialRisk) {
@@ -352,6 +369,69 @@ if (locationOutsideVilliers) {
   return [{ json: final('human_review', 'OUTSIDE_VILLIERS', null, {
     safetyFlags: { recipeHelp, allowDraftMutation: false, knownOutsideArea: true },
   }) }];
+}
+if (hasLocationCoordinates && activeDraft) {
+  const orders = JSON.parse(JSON.stringify(Array.isArray(draft?.state?.orders) ? draft.state.orders : []));
+  let targetIndex = orders.findIndex((order) => !order?.delivery_address && !order?.delivery_location);
+  if (targetIndex < 0 && orders.length === 1) targetIndex = 0;
+  if (targetIndex >= 0) {
+    orders[targetIndex] = {
+      ...orders[targetIndex],
+      delivery_location: { latitude: locationLatitude, longitude: locationLongitude },
+    };
+    const allOrdersReady = orders.length > 0 && orders.every((order) => {
+      const items = Array.isArray(order?.items) ? order.items : [];
+      return items.length > 0 && Boolean(order?.delivery_address || order?.delivery_location);
+    });
+    const draftState = {
+      ...JSON.parse(JSON.stringify(draft.state)),
+      stage: allOrdersReady ? 'awaiting_confirmation' : 'collecting',
+      orders,
+    };
+    const summary = orders.flatMap((order) => (Array.isArray(order?.items) ? order.items : []))
+      .map((item) => String(item?.quantity || 1) + ' x ' + String(item?.requested_text || '').trim())
+      .filter(Boolean)
+      .join(', ');
+    const response = allOrdersReady
+      ? 'Please confirm I understood your order:\n1. ' + summary + '\n\nVilliers delivery pin received. Reply YES to confirm. Current price and availability will be checked by staff before payment.'
+      : 'I saved the Villiers delivery pin. What would you like to add to the order?';
+    return [{ json: final('respond_now', allOrdersReady ? 'LOCATION_PIN_APPLIED_READY' : 'LOCATION_PIN_APPLIED', response, {
+      applyDraft: true,
+      draftState,
+    }) }];
+  }
+}
+if (typedVilliersAddress) {
+  const orders = JSON.parse(JSON.stringify(Array.isArray(draft?.state?.orders) ? draft.state.orders : []));
+  let targetIndex = orders.findIndex((order) => !order?.delivery_address && !order?.delivery_location);
+  if (targetIndex < 0 && orders.length === 1) targetIndex = 0;
+  if (targetIndex >= 0) {
+    orders[targetIndex] = {
+      ...orders[targetIndex],
+      delivery_address: text.slice(0,500),
+      delivery_location: null,
+    };
+    const allOrdersReady = orders.length > 0 && orders.every((order) => {
+      const items = Array.isArray(order?.items) ? order.items : [];
+      return items.length > 0 && Boolean(order?.delivery_address || order?.delivery_location);
+    });
+    const draftState = {
+      ...JSON.parse(JSON.stringify(draft.state)),
+      stage: allOrdersReady ? 'awaiting_confirmation' : 'collecting',
+      orders,
+    };
+    const summary = orders.flatMap((order) => (Array.isArray(order?.items) ? order.items : []))
+      .map((item) => String(item?.quantity || 1) + ' x ' + String(item?.requested_text || '').trim())
+      .filter(Boolean)
+      .join(', ');
+    const response = allOrdersReady
+      ? 'Please confirm I understood your order:\n1. ' + summary + ' - delivery: ' + text.slice(0,500) + '\n\nReply YES to confirm. Current price and availability will be checked by staff before payment.'
+      : 'I saved the Villiers delivery address. What would you like to add to the order?';
+    return [{ json: final('respond_now', allOrdersReady ? 'TYPED_VILLIERS_ADDRESS_APPLIED_READY' : 'TYPED_VILLIERS_ADDRESS_APPLIED', response, {
+      applyDraft: true,
+      draftState,
+    }) }];
+  }
 }
 if (knownOutsideArea) {
   return [{ json: final('human_review', 'OUTSIDE_VILLIERS', null, {
@@ -488,6 +568,81 @@ if (allowDraftMutation && referentialOrder) {
     return [{ json: final('respond_now', ready ? 'REFERENCED_VISIBLE_LIST_READY' : 'REFERENCED_VISIBLE_LIST_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];
   }
 }
+const quantityWords = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+  seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+};
+const multiQuantityPattern = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:bottles?|cans?|tins?|packs?|loaf|loaves|bars?|units?|items?)\s+(.+?)(?=\s+(?:and|n|&)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:bottles?|cans?|tins?|packs?|loaf|loaves|bars?|units?|items?)\b|\s+to\s+(?:my|the)\s+(?:shopping\s+)?(?:request|list|order)\b|[.!?]*$)/gi;
+const requestedShopMentions = [...text.matchAll(/\bfrom\s+((?:OK|Usave)\s+Villiers)\b/gi)];
+const globalRequestedShopMatch = requestedShopMentions.length === 1
+  ? text.match(/\s+from\s+((?:OK|Usave)\s+Villiers)\s*[.!?]*$/i)
+  : null;
+const normaliseRequestedShopName = (value) => String(value || '')
+  .replace(/^ok\b/i, 'OK')
+  .replace(/^usave\b/i, 'Usave');
+const globalRequestedShopName = globalRequestedShopMatch
+  ? normaliseRequestedShopName(globalRequestedShopMatch[1])
+  : null;
+const parseRequestedItemTextAndShop = (value) => {
+  const original = String(value || '').trim();
+  const itemShopMatch = original.match(/\s+from\s+((?:OK|Usave)\s+Villiers)\s*[.!?]*$/i);
+  return {
+    requestedText: original.replace(/\s+from\s+(?:OK|Usave)\s+Villiers\s*[.!?]*$/i, '').trim(),
+    requestedShopName: itemShopMatch
+      ? normaliseRequestedShopName(itemShopMatch[1])
+      : globalRequestedShopName,
+  };
+};
+const multiQuantityItems = [];
+for (const match of text.matchAll(multiQuantityPattern)) {
+  const token = String(match[1] || '').toLowerCase();
+  const quantity = /^\d+$/.test(token) ? Number(token) : quantityWords[token];
+  const parsedRequest = parseRequestedItemTextAndShop(String(match[2] || '').trim().replace(/^of\s+/i, ''));
+  const requestedText = parsedRequest.requestedText.slice(0,500);
+  if (Number.isSafeInteger(quantity) && requestedText) {
+    multiQuantityItems.push({ requested_text: requestedText, quantity, requested_shop_name: parsedRequest.requestedShopName, substitution_allowed: false });
+  }
+}
+if (allowDraftMutation && !referentialOrder && multiQuantityItems.length >= 2) {
+  if (multiQuantityItems.some((item) => item.quantity < 1 || item.quantity > 24)) {
+    return [{ json: final('respond_now', 'DIRECT_MULTI_QUANTITY_INVALID', 'Each item needs a whole-number quantity between 1 and 24. Which quantities should I use?') }];
+  }
+  const existingOrder = Array.isArray(draft?.state?.orders) && draft.state.orders[0] ? draft.state.orders[0] : {};
+  const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];
+  const itemMap = new Map([...existingItems, ...multiQuantityItems].map((entry) => [String(entry?.requested_text || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(), entry]));
+  const items = [...itemMap.values()].filter((entry) => entry?.requested_text);
+  const units = items.reduce((sum, entry) => sum + Number(entry?.quantity || 1), 0);
+  const shopNames = [...new Set([
+    ...(Array.isArray(existingOrder?.shop_names) ? existingOrder.shop_names : []),
+    ...items.map((entry) => entry?.requested_shop_name).filter(Boolean),
+  ])];
+  if (items.length > 16) return [{ json: final('respond_now', 'DIRECT_MULTI_OVER_LINE_LIMIT', 'That would take the order over 16 item lines. Which existing item should I remove first?') }];
+  if (units > 24) return [{ json: final('respond_now', 'DIRECT_MULTI_OVER_UNIT_LIMIT', 'That would take the order over 24 physical units. Which quantities should I reduce?') }];
+  if (shopNames.length > 3) return [{ json: final('respond_now', 'DIRECT_MULTI_OVER_SHOP_LIMIT', 'That order already uses three shops. Which shop should I leave out?') }];
+  const deliveryAddress = String(existingOrder?.delivery_address || '').trim() || null;
+  const deliveryLocation = existingOrder?.delivery_location || null;
+  const ready = Boolean(deliveryAddress || deliveryLocation);
+  const draftState = {
+    stage: ready ? 'awaiting_confirmation' : 'collecting',
+    orders: [{
+      label: existingOrder?.label || null,
+      items,
+      shop_names: shopNames,
+      delivery_address: deliveryAddress,
+      delivery_location: deliveryLocation,
+      substitution_preference: existingOrder?.substitution_preference || null,
+      requested_window: existingOrder?.requested_window || null,
+      notes: String(existingOrder?.notes || ''),
+    }],
+  };
+  const summary = items.map((item) => String(item.quantity || 1) + ' x ' + String(item.requested_text || '').trim()).join(', ');
+  const response = ready
+    ? 'Please confirm I understood your order:\n1. ' + summary + '\n\nReply YES to confirm. Current price and availability will be checked by staff before payment.'
+    : 'I have kept ' + summary + ' in the draft. What is the Villiers delivery address or WhatsApp location pin?';
+  return [{ json: final('respond_now', ready ? 'DIRECT_MULTI_QUANTITY_ITEMS_READY' : 'DIRECT_MULTI_QUANTITY_ITEMS_NEEDS_ADDRESS', response, { applyDraft: true, draftState }) }];
+}
 const directQuantityItem = text.match(/\b(?:add|buy|get|order|need|want)(?:\s+me)?\s+(\d+)\s+(?:bottles?|cans?|tins?|packs?|loaf|loaves|bars?|units?|items?)\s+(.+?)(?:\s+to\s+(?:my|the)\s+(?:shopping\s+)?(?:request|list|order))?[\s.!?]*$/i);
 if (allowDraftMutation && !referentialOrder && directQuantityItem) {
   const quantity = Number(directQuantityItem[1]);
@@ -497,11 +652,12 @@ if (allowDraftMutation && !referentialOrder && directQuantityItem) {
   if (quantity > 24) {
     return [{ json: final('respond_now', 'DIRECT_QUANTITY_OVER_UNIT_LIMIT', 'One order can contain at most 24 physical units. Which quantity up to 24 should I use?') }];
   }
-  const requestedText = String(directQuantityItem[2] || '').trim().replace(/^of\s+/i, '').slice(0,500);
+  const parsedRequest = parseRequestedItemTextAndShop(String(directQuantityItem[2] || '').trim().replace(/^of\s+/i, ''));
+  const requestedText = parsedRequest.requestedText.slice(0,500);
   if (requestedText) {
     const existingOrder = Array.isArray(draft?.state?.orders) && draft.state.orders[0] ? draft.state.orders[0] : {};
     const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];
-    const item = { requested_text: requestedText, quantity, requested_shop_name: null, substitution_allowed: false };
+    const item = { requested_text: requestedText, quantity, requested_shop_name: parsedRequest.requestedShopName, substitution_allowed: false };
     const itemMap = new Map([...existingItems, item].map((entry) => [String(entry?.requested_text || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(), entry]));
     const items = [...itemMap.values()].filter((entry) => entry?.requested_text);
     const units = items.reduce((sum, entry) => sum + Number(entry?.quantity || 1), 0);
@@ -608,6 +764,7 @@ const currentText = String(source?.body || '').toLowerCase();
 const recentMessages = Array.isArray(context?.recent_messages) ? context.recent_messages : [];
 const currentDraftOrders = Array.isArray(context?.order_draft?.state?.orders) ? context.order_draft.state.orders : [];
 const currentDraftItems = currentDraftOrders.flatMap((order) => Array.isArray(order?.items) ? order.items : []);
+const hasActiveDraft = ['collecting','awaiting_confirmation'].includes(String(context?.order_draft?.state?.stage || '')) && currentDraftItems.length > 0;
 const normalise = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
 const normalisedCurrentText = normalise(currentText);
 const recentVisibleText = normalise(recentMessages.slice(-10).map((message) => message?.body || '').join(' '));
@@ -640,6 +797,11 @@ if (orderSubmissionClaim && !submitDraft) {
   draftState=null;
   valid=true;
 }
+if (responseBody && !hasActiveDraft && !applyDraft) {
+  responseBody = responseBody
+    .replace(/\byour existing order\b/gi, 'a new order')
+    .replace(/\byour current order\b/gi, 'a new order');
+}
 if (responseBody && safety.recipeHelp !== true) {
   responseBody = responseBody.replace(/(?:\r?\n\s*)*Would you like[^?]*(?:recipe|cook)[^?]*\?\s*$/i, '').trim();
 }
@@ -649,6 +811,8 @@ if (safety.recipeHelp === true) {
   draftState=null;
   if (responseBody && ['respond_now','light_ack'].includes(decision)) {
     let formatted = responseBody
+      .replace(/\*\*/g, '')
+      .replace(/^\s*\*\s+/gm, '- ')
       .replace(/\u2022/g, '-')
       .replace(/Ingredients\s*\([^\n:]*\)\s*:/i, 'Ingredients:')
       .replace(/;\s*Serves\s*:?\s*/i, '\nServes: ')
@@ -659,6 +823,7 @@ if (safety.recipeHelp === true) {
       .replace(/\r/g, '')
       .trim();
     formatted = formatted
+      .replace(/(?:\r?\n\s*)*Quick question:[\s\S]*?\?\s*$/i, '')
       .replace(/\n?\s*(Would you like|Want me to|Should I)[^?]*\?\s*$/i, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();

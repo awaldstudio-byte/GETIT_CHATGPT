@@ -22,7 +22,10 @@ const executeCode = (code, namedItems, inputJson = {}, currentJson = {}) => {
     return { item: { json: namedItems[name] } };
   };
   const input = { first: () => ({ json: inputJson }) };
-  return new Function('$', '$input', '$json', code)(getNamed, input, currentJson);
+  // n8n's external JavaScript task runner does not expose structuredClone.
+  // Shadow it here so local tests fail if workflow code accidentally depends
+  // on a host-only global that production cannot execute.
+  return new Function('$', '$input', '$json', 'structuredClone', code)(getNamed, input, currentJson, undefined);
 };
 
 const grounding = {
@@ -133,6 +136,23 @@ if (!deterministicOnly) {
   ]);
 }
 
+const recipeFormattingBuilt = build('Can you give me a simple chicken wrap recipe?');
+const recipeFormatting = validate(recipeFormattingBuilt, {
+  decision: 'respond_now',
+  reason_code: 'RECIPE_HELP',
+  confidence: 0.99,
+  response_body: '**Serves:** 2\n**Ingredients:**\n* Chicken\n* Wraps\n**Method:**\n1. Cook chicken.\n2. Fill wraps.\n\nQuick question: Do you want another suggestion?',
+  apply_draft: false,
+  draft_state: null,
+  submit_draft: false,
+});
+record('recipe replies use clean WhatsApp formatting and one closing question', recipeFormatting, [
+  [!/\*\*/.test(recipeFormatting.responseBody || ''), 'bold Markdown leaked into WhatsApp'],
+  [!/^\s*\*\s+/m.test(recipeFormatting.responseBody || ''), 'asterisk bullets leaked into WhatsApp'],
+  [((recipeFormatting.responseBody || '').match(/Quick question:/g) || []).length === 1, 'recipe contained more than one closing question label'],
+  [/Ingredients:\n- Chicken\n- Wraps/i.test(recipeFormatting.responseBody || ''), 'ingredient list was not normalised'],
+]);
+
 const availability = await resolveDecision(build('Do you have Clover milk available?'));
 record('stale catalogue cannot become an availability claim', availability, [
   [availability.applyDraft === false, 'availability question mutated a draft'],
@@ -203,6 +223,23 @@ record('a follow-up item is not mistaken for an address answer', followUpItem, [
   [(followUpItem.draftState?.orders?.[0]?.items || []).some((item) => /test bread/i.test(item.requested_text || '')), 'follow-up item was lost'],
 ]);
 
+const misspelledFollowUpBuilt = build('also pls ad 3 tins baked beans n two packs pasta', followUpItemContext);
+record('an obvious misspelled follow-up order is not mistaken for an address answer', misspelledFollowUpBuilt, [
+  [misspelledFollowUpBuilt.reasonCode !== 'VILLIERS_LOCATION_CONFIRMATION_REQUIRED', 'misspelled order was routed as an address answer'],
+  [misspelledFollowUpBuilt.safetyFlags?.allowDraftMutation === true, 'misspelled order was not allowed to update the active draft'],
+]);
+
+if (!deterministicOnly) {
+  const misspelledFollowUp = await resolveDecision(misspelledFollowUpBuilt);
+  const misspelledItems = misspelledFollowUp.draftState?.orders?.flatMap((order) => order.items || []) || [];
+  record('the model preserves items and quantities from a misspelled follow-up order', misspelledFollowUp, [
+    [misspelledFollowUp.applyDraft === true, 'model did not update the active draft'],
+    [misspelledItems.some((item) => /baked beans/i.test(item.requested_text || '') && Number(item.quantity) === 3), 'baked beans quantity was lost'],
+    [misspelledItems.some((item) => /pasta/i.test(item.requested_text || '') && Number(item.quantity) === 2), 'pasta quantity was lost'],
+    [misspelledItems.some((item) => /test milk/i.test(item.requested_text || '')), 'existing draft item was lost'],
+  ]);
+}
+
 const sixteenLineDraftContext = {
   ...structuredClone(baseContext),
   conversation: { mode: 'automation' },
@@ -266,20 +303,31 @@ const villiersPinBuilt = build('', villiersPinContext, {
   messageType: 'location',
   payload: { message: { location: { latitude: -27.029719, longitude: 28.600826 } } },
 });
-const villiersPin = validate(villiersPinBuilt, {
-  decision: 'respond_now',
-  reason_code: 'LOCATION_RECEIVED',
-  confidence: 0.99,
-  response_body: 'I have attached the Villiers location pin.',
-  apply_draft: true,
-  draft_state: villiersPinContext.order_draft.state,
-  submit_draft: false,
-});
+const villiersPin = villiersPinBuilt;
 record('a Villiers pin is attached to the active order and reaches confirmation', villiersPin, [
+  [villiersPin.requiresModel === false, 'valid Villiers pin still depended on the model'],
   [villiersPin.applyDraft === true, 'valid Villiers pin did not update the draft'],
   [villiersPin.draftState?.stage === 'awaiting_confirmation', 'valid Villiers pin did not make the complete draft confirmable'],
+  [villiersPin.reasonCode === 'LOCATION_PIN_APPLIED_READY', 'valid Villiers pin used the wrong deterministic path'],
   [Number(villiersPin.draftState?.orders?.[0]?.delivery_location?.latitude) === -27.029719, 'Villiers pin latitude was lost'],
   [Number(villiersPin.draftState?.orders?.[0]?.delivery_location?.longitude) === 28.600826, 'Villiers pin longitude was lost'],
+]);
+
+const typedAddressAfterRecipe = build('35 Emmet Street, Villiers', {
+  ...structuredClone(villiersPinContext),
+  recent_messages: [
+    { direction: 'inbound', body: 'what are we making for dinner' },
+    { direction: 'outbound', body: 'Chicken wraps are a great dinner idea.' },
+    { direction: 'outbound', body: 'What is the Villiers delivery address or WhatsApp location pin?' },
+  ],
+});
+record('a typed Villiers address cannot be swallowed by earlier recipe context', typedAddressAfterRecipe, [
+  [typedAddressAfterRecipe.requiresModel === false, 'typed Villiers address still depended on the model'],
+  [typedAddressAfterRecipe.applyDraft === true, 'typed Villiers address did not update the draft'],
+  [typedAddressAfterRecipe.draftState?.stage === 'awaiting_confirmation', 'typed Villiers address did not make the draft confirmable'],
+  [typedAddressAfterRecipe.draftState?.orders?.[0]?.delivery_address === '35 Emmet Street, Villiers', 'typed Villiers address was not preserved'],
+  [typedAddressAfterRecipe.reasonCode === 'TYPED_VILLIERS_ADDRESS_APPLIED_READY', 'typed address used the wrong deterministic path'],
+  [typedAddressAfterRecipe.safetyFlags?.recipeHelp === false, 'typed address was still marked as recipe help'],
 ]);
 
 const humanOwned = build('Please add 2 bottles of milk', {
@@ -440,6 +488,53 @@ record('dry-run confirmation cannot submit an order', dryRunConfirmation, [
   [dryRunConfirmation.reasonCode === 'DRY_RUN_DRAFT_CONFIRMATION', 'dry-run confirmation used the wrong reason'],
 ]);
 
+const cancelUnsubmittedDraft = build('cancel that order', naturalConfirmationContext);
+record('an unsubmitted draft can be cancelled without a silent human handoff', cancelUnsubmittedDraft, [
+  [cancelUnsubmittedDraft.requiresModel === false, 'draft cancellation depended on the model'],
+  [cancelUnsubmittedDraft.decision === 'respond_now', 'draft cancellation did not acknowledge the customer'],
+  [cancelUnsubmittedDraft.reasonCode === 'DRAFT_CANCELLED', 'draft cancellation used the wrong path'],
+  [cancelUnsubmittedDraft.applyDraft === true, 'draft cancellation was not persisted'],
+  [cancelUnsubmittedDraft.submitDraft === false, 'draft cancellation submitted an order'],
+  [cancelUnsubmittedDraft.draftState?.stage === 'cancelled', 'draft stage was not cancelled'],
+  [(cancelUnsubmittedDraft.draftState?.orders || []).length === 0, 'cancelled draft retained order lines'],
+]);
+
+const confirmationAfterCancellation = build('YES', {
+  ...structuredClone(baseContext),
+  conversation: { mode: 'automation' },
+  order_draft: { version: 9, state: { stage: 'cancelled', orders: [] } },
+});
+record('confirmation after cancellation cannot revive or submit an old draft', confirmationAfterCancellation, [
+  [confirmationAfterCancellation.requiresModel === false, 'post-cancellation confirmation reached the model'],
+  [confirmationAfterCancellation.submitDraft === false, 'post-cancellation confirmation submitted an order'],
+  [confirmationAfterCancellation.applyDraft === false, 'post-cancellation confirmation mutated a draft'],
+  [confirmationAfterCancellation.reasonCode === 'NO_ACTIVE_DRAFT_TO_CONFIRM', 'post-cancellation confirmation used the wrong path'],
+  [/no active draft/i.test(confirmationAfterCancellation.responseBody || ''), 'customer was not told there is no active draft'],
+]);
+
+const realCatalogueShopOrder = build('Yes please add 2 tins KOO Baked Beans 400g and 1 bottle Sunlight Dishwashing Liquid 750ml from OK Villiers');
+const realCatalogueShopItems = realCatalogueShopOrder.draftState?.orders?.[0]?.items || [];
+record('a trailing real shop applies to every item without contaminating product names', realCatalogueShopOrder, [
+  [realCatalogueShopOrder.requiresModel === false, 'clear multi-item catalogue order reached the model'],
+  [realCatalogueShopOrder.applyDraft === true, 'clear multi-item catalogue order did not create a draft'],
+  [realCatalogueShopItems.length === 2, 'clear multi-item catalogue order lost an item'],
+  [realCatalogueShopItems.every((item) => item.requested_shop_name === 'OK Villiers'), 'requested shop did not apply to every item'],
+  [realCatalogueShopItems.every((item) => !/from OK Villiers/i.test(item.requested_text || '')), 'shop suffix contaminated a product name'],
+  [(realCatalogueShopOrder.draftState?.orders?.[0]?.shop_names || []).includes('OK Villiers'), 'order-level shop list was not populated'],
+]);
+
+const realCatalogueTwoShopOrder = build('Please add 1 tin KOO Baked Beans 400g from OK Villiers and 1 tin Homegrown Baked Beans 410g from Usave Villiers');
+const realCatalogueTwoShopItems = realCatalogueTwoShopOrder.draftState?.orders?.[0]?.items || [];
+record('item-specific shops survive a real two-shop order', realCatalogueTwoShopOrder, [
+  [realCatalogueTwoShopOrder.requiresModel === false, 'clear two-shop order reached the model'],
+  [realCatalogueTwoShopOrder.applyDraft === true, 'clear two-shop order did not create a draft'],
+  [realCatalogueTwoShopItems.length === 2, 'clear two-shop order lost an item'],
+  [realCatalogueTwoShopItems.some((item) => /KOO Baked Beans 400g/i.test(item.requested_text || '') && item.requested_shop_name === 'OK Villiers'), 'OK item lost its shop'],
+  [realCatalogueTwoShopItems.some((item) => /Homegrown Baked Beans 410g/i.test(item.requested_text || '') && item.requested_shop_name === 'Usave Villiers'), 'Usave item lost its shop'],
+  [(realCatalogueTwoShopOrder.draftState?.orders?.[0]?.shop_names || []).length === 2, 'two-shop order did not retain both shops'],
+  [realCatalogueTwoShopItems.every((item) => !/from (?:OK|Usave) Villiers/i.test(item.requested_text || '')), 'shop suffix contaminated a two-shop product name'],
+]);
+
 const recipeSpecialFollowUp = build('everything you have on special for that recipe', referencedOrderContext, {}, operatorApprovedGrounding);
 record('recipe-specific specials stay in conversational reasoning', recipeSpecialFollowUp, [
   [recipeSpecialFollowUp.requiresModel === false, 'safe recipe-specific comparison unnecessarily reached the model'],
@@ -467,6 +562,20 @@ record('false order-action claims are blocked', falseClaim, [
   [falseClaim.decision === 'human_review', 'false mutation claim was allowed'],
   [falseClaim.reasonCode === 'FALSE_ORDER_MUTATION_CLAIM', 'wrong false-claim reason'],
   [falseClaim.responseBody === null, 'unsafe false claim was retained'],
+]);
+
+const nonexistentDraftClaim = validate(build('What is cheapest right now?'), {
+  decision: 'respond_now',
+  reason_code: 'SAFE_CLARIFICATION',
+  confidence: 0.99,
+  response_body: 'Would you like me to add bread and milk to your existing order instead?',
+  apply_draft: false,
+  draft_state: null,
+  submit_draft: false,
+});
+record('the bot cannot refer to an existing order when no active draft exists', nonexistentDraftClaim, [
+  [!/existing order|current order/i.test(nonexistentDraftClaim.responseBody || ''), 'response invented a current order'],
+  [/new order/i.test(nonexistentDraftClaim.responseBody || ''), 'response did not offer a truthful new order'],
 ]);
 
 const falseSubmission = validate(falseClaimBuilt, {
