@@ -14,6 +14,7 @@ const requiredInbound = [
   'Fetch Meta Voice Audio',
   'Transcribe Voice Audio',
   'Attach Voice Transcript',
+  'Restore Conversation Context',
   'Persist Inbound Message',
   'Fetch Messaging Context',
   'Build Safety Decision',

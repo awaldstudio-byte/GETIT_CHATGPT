@@ -62,7 +62,7 @@ const source = (body, overrides = {}) => ({
 const build = (body, context = baseContext, overrides = {}, groundingInput = grounding) => executeCode(
   buildCode,
   {
-    'Attach Partner Application': source(body, overrides),
+    'Continue Partner Processing': source(body, overrides),
     'Fetch Messaging Context': structuredClone(context),
   },
   structuredClone(groundingInput),
@@ -124,6 +124,38 @@ const record = (name, actual, checks) => {
     rawOutput: failures.length ? actual.rawOutput : undefined,
   });
 };
+
+for (const blockedMode of ['human', 'paused']) {
+  const blockedPartner = build('submitted a Getit form', {
+    ...baseContext,
+    conversation: { mode: blockedMode },
+  }, {
+    messageType: 'interactive',
+    partnerResult: {
+      handled: true,
+      reason_code: 'SHOP_APPLICATION_SUBMITTED',
+      response_body: 'This must never be sent while staff owns the conversation.',
+    },
+  });
+  record(`${blockedMode} mode suppresses partner automation`, blockedPartner, [
+    [blockedPartner.decision === 'no_response', `${blockedMode} mode produced an automated response`],
+    [blockedPartner.reasonCode === 'HUMAN_OWNED', `${blockedMode} mode did not use the human-owned safety reason`],
+    [blockedPartner.responseBody === null, `${blockedMode} mode leaked partner response copy`],
+  ]);
+}
+
+const partnerOptOut = build('STOP', baseContext, {
+  partnerResult: {
+    handled: true,
+    reason_code: 'PARTNER_CATALOGUE_KIND_REQUIRED',
+    response_body: 'This must not override an opt-out.',
+  },
+});
+record('opt-out overrides an active partner catalogue flow', partnerOptOut, [
+  [partnerOptOut.decision === 'no_response', 'opt-out produced an automated partner response'],
+  [partnerOptOut.reasonCode === 'CUSTOMER_OPT_OUT', 'opt-out used the wrong reason code'],
+  [partnerOptOut.responseBody === null, 'opt-out leaked response copy'],
+]);
 
 const submittedConfirmation = restore({
   submitDraft: true,

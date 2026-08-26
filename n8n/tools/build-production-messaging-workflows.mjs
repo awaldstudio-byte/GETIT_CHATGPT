@@ -214,6 +214,21 @@ const source = $('Attach Message').item.json;
 const result = $input.first().json;
 return [{ json: { ...source, partnerResult: result && typeof result === 'object' ? result : { handled: false } } }];`;
 
+const attachCatalogueUploadCode = String.raw`
+const source = $('Attach Partner Application').item.json;
+const result = $input.first().json || {};
+const fallback = {
+  handled: true,
+  reason_code: String(result.code || 'PARTNER_CATALOGUE_UPLOAD_FAILED').slice(0, 120),
+  response_body: null,
+  requires_human: true,
+  application_id: source.partnerResult?.application_id || null,
+  application_type: 'shop',
+  status: source.partnerResult?.status || null,
+  submission_id: source.partnerResult?.submission_id || null,
+};
+return [{ json: { ...source, partnerResult: result.partner_result && typeof result.partner_result === 'object' ? result.partner_result : fallback } }];`;
+
 const attachVoiceTranscriptCode = String.raw`
 const source = $('Attach Conversation').item.json;
 const result = $input.first().json || {};
@@ -233,7 +248,7 @@ return [{ json: {
 } }];`;
 
 const buildSafetyDecisionCode = String.raw`
-const source = $('Attach Partner Application').item.json;
+const source = $('Continue Partner Processing').item.json;
 const context = $('Fetch Messaging Context').item.json;
 const grounding = $input.first().json && typeof $input.first().json === 'object' ? $input.first().json : {};
 context.grounding = grounding;
@@ -348,6 +363,12 @@ const final = (decision, reasonCode, responseBody = null, extra = {}) => {
     ...extraFields,
   };
 };
+if (['human','paused'].includes(mode)) {
+  return [{ json: final('no_response', 'HUMAN_OWNED') }];
+}
+if (/\b(stop|unsubscribe|opt\s*out|do not message|moenie.*boodskap)\b/i.test(lower)) {
+  return [{ json: final('no_response', 'CUSTOMER_OPT_OUT') }];
+}
 if (source.partnerResult?.handled) {
   const requiresHuman = source.partnerResult?.requires_human === true || !source.partnerResult?.response_body;
   return [{ json: final(requiresHuman ? 'human_review' : 'respond_now', source.partnerResult.reason_code || 'PARTNER_APPLICATION_HANDLED', source.partnerResult.response_body || null, {
@@ -358,13 +379,7 @@ if (source.partnerResult?.handled) {
     partnerFlowKind: source.partnerResult.flow_kind || null,
   }) }];
 }
-if (['human','paused'].includes(mode)) {
-  return [{ json: final('no_response', 'HUMAN_OWNED') }];
-}
 if (source.messageType === 'reaction') return [{ json: final('no_response', 'REACTION_ONLY') }];
-if (/\b(stop|unsubscribe|opt\s*out|do not message|moenie.*boodskap)\b/i.test(lower)) {
-  return [{ json: final('no_response', 'CUSTOMER_OPT_OUT') }];
-}
 const cancelDraftIntent = /^(?:please\s+)?(?:cancel|delete|clear|discard)(?:\s+(?:that|this|my|the))?\s+(?:draft|order)[\s.!?]*$/i.test(text)
   || /^(?:never\s*mind|nevermind)(?:,?\s*(?:cancel|delete|clear|discard)(?:\s+(?:that|this|my|the))?\s+(?:draft|order))?[\s.!?]*$/i.test(text);
 if (activeDraft && cancelDraftIntent) {
@@ -1009,7 +1024,7 @@ if (riskyClaim) { decision='human_review'; reasonCode='UNVERIFIED_FACTUAL_CLAIM'
 return [{ json: {
   ...source, decision, reasonCode, confidence, responseBody, applyDraft, submitDraft, draftState,
   schemaValid: Boolean(valid), factsValid: Boolean(valid && !riskyClaim), modelName: 'qwen3.5:4b',
-  modelDigest: 'qwen3.5:4b-local-structured-v1-20-0-atomic-orders', rawOutput: parsed,
+  modelDigest: 'qwen3.5:4b-local-structured-v1-22-0-partner-catalogues', rawOutput: parsed,
   responseUi: source.responseUi || null,
 } }];`;
 
@@ -1067,7 +1082,7 @@ const inboundNodes = [
   schedule('Every Second', [-1320, -80]),
   manual('Run Inbound Worker', [-1320, 140]),
   http('Claim Messaging Events', [-1080, 20], `${SUPABASE_RPC}/claim_messaging_events`, {
-    p_worker_id: 'getit-production-inbound-v1-18', p_limit: 1, p_lease_seconds: 120,
+    p_worker_id: 'getit-production-inbound-v1-22', p_limit: 1, p_lease_seconds: 600,
   }),
   code('Normalize Meta Events', [-820, 20], normalizeMetaCode),
   switchNode('Route Event', [-560, 20], [
@@ -1078,16 +1093,21 @@ const inboundNodes = [
   http('Upsert Conversation', [-300, -360], `${SUPABASE_RPC}/upsert_messaging_conversation`, '={{ JSON.stringify({ p_provider: $json.provider, p_channel: $json.channel, p_external_contact_key: $json.externalContactKey, p_external_conversation_key: $json.externalConversationKey, p_customer_id: null, p_initial_mode: "dry_run" }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'conversation_id_raw' }),
   code('Attach Conversation', [-40, -360], attachConversationCode),
   http('Upsert Customer Identity', [220, -360], `${SUPABASE_RPC}/upsert_messaging_customer_identity`, '={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_phone: $json.externalContactKey, p_full_name: $json.profileName, p_preferred_language: null }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'customer_id_raw' }),
-  ifNode('Voice Message?', [460, -700], '={{ $("Attach Conversation").item.json.messageType === "audio" }}'),
+  code('Restore Conversation Context', [460, -360], String.raw`return [{ json: $('Attach Conversation').item.json }];`),
+  ifNode('Voice Message?', [700, -700], '={{ $json.messageType === "audio" }}'),
   http('Fetch Meta Voice Audio', [720, -700], `${EDGE_BASE}/meta-whatsapp-media`, '={{ JSON.stringify({ media_id: $("Attach Conversation").item.json.payload?.message?.audio?.id, expected_sha256: $("Attach Conversation").item.json.payload?.message?.audio?.sha256 }) }}', apiKeyCredential, { timeout: 30000, neverError: true, retryOnFail: true, maxTries: 2 }),
   http('Transcribe Voice Audio', [980, -700], 'http://host.docker.internal:8788/transcribe', '={{ JSON.stringify({ audio_base64: $json.audio_base64, mime_type: $json.mime_type, sha256: $json.sha256 }) }}', {}, { timeout: 90000, neverError: true, retryOnFail: false, onError: 'continueRegularOutput' }),
   code('Attach Voice Transcript', [1240, -700], attachVoiceTranscriptCode),
-  http('Persist Inbound Message', [480, -360], `${SUPABASE_RPC}/record_inbound_message`, '={{ JSON.stringify({ p_event_id: $json.eventId, p_conversation_id: $json.conversationId, p_idempotency_key: "in:meta_whatsapp:" + $json.providerMessageId, p_provider_message_id: $json.providerMessageId, p_message_type: $json.messageType, p_body: $json.body, p_payload: { ...$json.payload, ...($json.voiceTranscription ? { voice_transcription: $json.voiceTranscription } : {}) } }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'message_id_raw' }),
+  http('Persist Inbound Message', [720, -360], `${SUPABASE_RPC}/record_inbound_message`, '={{ JSON.stringify({ p_event_id: $json.eventId, p_conversation_id: $json.conversationId, p_idempotency_key: "in:meta_whatsapp:" + $json.providerMessageId, p_provider_message_id: $json.providerMessageId, p_message_type: $json.messageType, p_body: $json.body, p_payload: { ...$json.payload, ...($json.voiceTranscription ? { voice_transcription: $json.voiceTranscription } : {}) } }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'message_id_raw' }),
   code('Attach Message', [740, -360], attachMessageCode),
-  http('Process Partner Application', [1000, -360], `${SUPABASE_RPC}/process_partner_application_message_v4`, '={{ JSON.stringify({ p_conversation_id:$json.conversationId, p_message_id:$json.messageId, p_message_type:$json.messageType, p_body:$json.body, p_payload:$json.payload, p_interactive_reply_id:$json.interactiveReplyId }) }}'),
+  http('Process Partner Application', [1000, -360], `${SUPABASE_RPC}/process_partner_application_message_v5`, '={{ JSON.stringify({ p_conversation_id:$json.conversationId, p_message_id:$json.messageId, p_message_type:$json.messageType, p_body:$json.body, p_payload:$json.payload, p_interactive_reply_id:$json.interactiveReplyId }) }}'),
   code('Attach Partner Application', [1260, -360], attachPartnerApplicationCode),
-  http('Fetch Messaging Context', [1520, -360], `${SUPABASE_RPC}/get_messaging_context`, '={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_message_limit: 12, p_order_limit: 5 }) }}'),
-  http('Fetch Messaging Grounding', [1760, -360], `${SUPABASE_RPC}/get_messaging_grounding`, '={{ JSON.stringify({ p_query: (() => { const body=String($("Attach Partner Application").item.json.body||""); if (!/\\b(recipe|ingredients|them|those|these|everything)\\b/i.test(body)) return body; const recent=Array.isArray($json.recent_messages)?$json.recent_messages:[]; const recipe=[...recent].reverse().find(m=>m?.direction==="outbound" && /ingredients:/i.test(String(m?.body||""))); const bullets=recipe?String(recipe.body||"").split(/\\r?\\n/).filter(line=>/^\\s*[-\\u2022]\\s+\\S/.test(line)).join(" "):""; return (body+" "+bullets).slice(0,3000); })(), p_limit: 12 }) }}'),
+  ifNode('Partner Catalogue Media?', [1510, -650], '={{ $json.partnerResult?.media_upload_required === true }}'),
+  http('Save Partner Catalogue Media', [1770, -720], `${EDGE_BASE}/meta-whatsapp-catalogue-media`, '={{ JSON.stringify({ submission_id:$json.partnerResult.submission_id, application_id:$json.partnerResult.application_id, conversation_id:$json.conversationId, message_id:$json.messageId, media_id:$json.partnerResult.meta_media_id, expected_sha256:$json.messageType === "image" ? $json.payload?.message?.image?.sha256 : $json.payload?.message?.document?.sha256, file_name:$json.messageType === "image" ? ($json.payload?.message?.image?.filename || "catalogue-image") : ($json.payload?.message?.document?.filename || "catalogue") }) }}', apiKeyCredential, { timeout: 45000, neverError: false, retryOnFail: true, maxTries: 3 }),
+  code('Attach Catalogue Upload', [2030, -720], attachCatalogueUploadCode),
+  code('Continue Partner Processing', [2270, -360], String.raw`return $input.all();`),
+  http('Fetch Messaging Context', [2510, -360], `${SUPABASE_RPC}/get_messaging_context`, '={{ JSON.stringify({ p_conversation_id: $json.conversationId, p_message_limit: 12, p_order_limit: 5 }) }}'),
+  http('Fetch Messaging Grounding', [2750, -360], `${SUPABASE_RPC}/get_messaging_grounding`, '={{ JSON.stringify({ p_query: (() => { const body=String($("Continue Partner Processing").item.json.body||""); if (!/\\b(recipe|ingredients|them|those|these|everything)\\b/i.test(body)) return body; const recent=Array.isArray($json.recent_messages)?$json.recent_messages:[]; const recipe=[...recent].reverse().find(m=>m?.direction==="outbound" && /ingredients:/i.test(String(m?.body||""))); const bullets=recipe?String(recipe.body||"").split(/\\r?\\n/).filter(line=>/^\\s*[-\\u2022]\\s+\\S/.test(line)).join(" "):""; return (body+" "+bullets).slice(0,3000); })(), p_limit: 12 }) }}'),
   code('Build Safety Decision', [2000, -360], buildSafetyDecisionCode),
   http('Mark Read and Show AI Typing', [1510, -360], `${EDGE_BASE}/meta-whatsapp-presence`, '={{ JSON.stringify({ message_id:$json.providerMessageId, typing_indicator:$json.requiresModel }) }}', apiKeyCredential, { timeout: 10000, neverError: true, retryOnFail: false }),
   code('Restore Safety Decision', [1750, -360], String.raw`return [{ json: $('Build Safety Decision').item.json }];`),
@@ -1101,10 +1121,10 @@ const inboundNodes = [
   ]),
   http('Submit Confirmed Draft', [2560, -540], `${SUPABASE_RPC}/confirm_and_submit_messaging_order_draft_v1`, '={{ JSON.stringify({ p_conversation_id: $("Route Draft Action").item.json.conversationId, p_expected_version: $("Route Draft Action").item.json.context.order_draft.version, p_confirmation_message_id: $("Route Draft Action").item.json.messageId }) }}'),
   http('Replace Draft State', [2560, -360], `${SUPABASE_RPC}/replace_messaging_order_draft_state`, '={{ JSON.stringify({ p_conversation_id: $("Route Draft Action").item.json.conversationId, p_expected_version: $("Route Draft Action").item.json.context.order_draft.version, p_state: $("Route Draft Action").item.json.draftState, p_source_message_id: $("Route Draft Action").item.json.messageId }) }}'),
-  http('Record Final Decision', [2820, -360], `${SUPABASE_RPC}/record_messaging_decision`, '={{ (() => { const d=$("Route Draft Action").item.json; return JSON.stringify({ p_event_id:d.eventId, p_decision:d.decision, p_reason_code:d.reasonCode, p_prompt_version:"getit-production-structured-v1-20-0", p_confidence:d.confidence, p_facts:{ conversation_mode:d.context?.conversation?.mode, message_type:d.messageType, draft_updated:d.applyDraft, draft_submitted:d.submitDraft, partner_application:d.partnerHandled||false, partner_flow_kind:d.partnerFlowKind||null, response_ui:d.responseUi||null, recipe_help:d.safetyFlags?.recipeHelp===true, explicit_order_intent:d.safetyFlags?.explicitOrderIntent===true, catalogue_current:d.safetyFlags?.catalogueCurrent===true, catalogue_price_current:d.safetyFlags?.cataloguePriceCurrent===true, dry_run:d.context?.conversation?.mode==="dry_run" }, p_model_name:d.modelName, p_model_digest:d.modelDigest, p_raw_output:d.rawOutput, p_schema_valid:d.schemaValid, p_facts_valid:d.factsValid, p_is_final:true }); })() }}'),
+  http('Record Final Decision', [2820, -360], `${SUPABASE_RPC}/record_messaging_decision`, '={{ (() => { const d=$("Route Draft Action").item.json; return JSON.stringify({ p_event_id:d.eventId, p_decision:d.decision, p_reason_code:d.reasonCode, p_prompt_version:"getit-production-structured-v1-22-0", p_confidence:d.confidence, p_facts:{ conversation_mode:d.context?.conversation?.mode, message_type:d.messageType, draft_updated:d.applyDraft, draft_submitted:d.submitDraft, partner_application:d.partnerHandled||false, partner_flow_kind:d.partnerFlowKind||null, response_ui:d.responseUi||null, recipe_help:d.safetyFlags?.recipeHelp===true, explicit_order_intent:d.safetyFlags?.explicitOrderIntent===true, catalogue_current:d.safetyFlags?.catalogueCurrent===true, catalogue_price_current:d.safetyFlags?.cataloguePriceCurrent===true, dry_run:d.context?.conversation?.mode==="dry_run" }, p_model_name:d.modelName, p_model_digest:d.modelDigest, p_raw_output:d.rawOutput, p_schema_valid:d.schemaValid, p_facts_valid:d.factsValid, p_is_final:true }); })() }}'),
   code('Restore Recorded Decision', [3080, -360], restoreDecisionCode),
   ifNode('Queue Customer Response?', [3340, -360], '={{ ["respond_now","light_ack"].includes($json.decision) && Boolean($json.responseBody) }}'),
-  http('Queue Decision Response', [3600, -500], `${SUPABASE_RPC}/queue_decision_response_v4`, '={{ JSON.stringify({ p_event_id:$json.eventId, p_idempotency_key:"decision:" + ($json.eventKey || $json.eventId) + ":v1-20", p_body:$json.responseBody, p_payload:{ origin:"getit-production-inbound-v1-20", draft_updated:$json.applyDraft, draft_submitted:$json.submitDraft, partner_application:$json.partnerHandled||false, flow_kind:$json.partnerFlowKind||null, response_ui:$json.responseUi||null, grounded:true }, p_offer_welcome_menu:true, p_max_attempts:5 }) }}'),
+  http('Queue Decision Response', [3600, -500], `${SUPABASE_RPC}/queue_decision_response_v4`, '={{ JSON.stringify({ p_event_id:$json.eventId, p_idempotency_key:"decision:" + ($json.eventKey || $json.eventId) + ":v1-22", p_body:$json.responseBody, p_payload:{ origin:"getit-production-inbound-v1-22", draft_updated:$json.applyDraft, draft_submitted:$json.submitDraft, partner_application:$json.partnerHandled||false, flow_kind:$json.partnerFlowKind||null, response_ui:$json.responseUi||null, grounded:true }, p_offer_welcome_menu:true, p_max_attempts:5 }) }}'),
   http('Finish Inbound Event', [3860, -360], `${SUPABASE_RPC}/finish_messaging_event`, '={{ JSON.stringify({ p_event_id:$("Restore Recorded Decision").item.json.eventId, p_lock_token:$("Restore Recorded Decision").item.json.lockToken, p_outcome:"processed", p_retry_after_seconds:0, p_error_code:null, p_error_detail:null }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'finish_result' }),
   http('Apply Delivery Status', [-300, 20], `${SUPABASE_RPC}/apply_messaging_delivery_status`, '={{ JSON.stringify({ p_provider:$json.provider, p_provider_message_id:$json.providerMessageId, p_status:$json.status, p_provider_timestamp:$json.providerTimestamp ? new Date(Number($json.providerTimestamp)*1000).toISOString() : null, p_error_code:$json.errors?.[0]?.code ? String($json.errors[0].code) : null, p_error_detail:$json.errors?.[0]?.title || null, p_payload:$json.payload }) }}', apiKeyCredential, { responseFormat: 'text', outputPropertyName: 'status_raw' }),
   code('Classify Delivery Status', [-40, 20], classifyStatusCode),
@@ -1117,12 +1137,16 @@ const inboundConnections = connections(
   ['Every Second',0,'Claim Messaging Events'], ['Run Inbound Worker',0,'Claim Messaging Events'],
   ['Claim Messaging Events',0,'Normalize Meta Events'], ['Normalize Meta Events',0,'Route Event'],
   ['Route Event',0,'Upsert Conversation'], ['Upsert Conversation',0,'Attach Conversation'],
-  ['Attach Conversation',0,'Upsert Customer Identity'], ['Upsert Customer Identity',0,'Voice Message?'],
+  ['Attach Conversation',0,'Upsert Customer Identity'], ['Upsert Customer Identity',0,'Restore Conversation Context'],
+  ['Restore Conversation Context',0,'Voice Message?'],
   ['Voice Message?',0,'Fetch Meta Voice Audio'], ['Fetch Meta Voice Audio',0,'Transcribe Voice Audio'],
   ['Transcribe Voice Audio',0,'Attach Voice Transcript'], ['Attach Voice Transcript',0,'Persist Inbound Message'],
   ['Voice Message?',1,'Persist Inbound Message'],
   ['Persist Inbound Message',0,'Attach Message'], ['Attach Message',0,'Process Partner Application'],
-  ['Process Partner Application',0,'Attach Partner Application'], ['Attach Partner Application',0,'Fetch Messaging Context'],
+  ['Process Partner Application',0,'Attach Partner Application'], ['Attach Partner Application',0,'Partner Catalogue Media?'],
+  ['Partner Catalogue Media?',0,'Save Partner Catalogue Media'], ['Save Partner Catalogue Media',0,'Attach Catalogue Upload'],
+  ['Attach Catalogue Upload',0,'Continue Partner Processing'], ['Partner Catalogue Media?',1,'Continue Partner Processing'],
+  ['Continue Partner Processing',0,'Fetch Messaging Context'],
   ['Fetch Messaging Context',0,'Fetch Messaging Grounding'], ['Fetch Messaging Grounding',0,'Build Safety Decision'], ['Build Safety Decision',0,'Mark Read and Show AI Typing'],
   ['Mark Read and Show AI Typing',0,'Restore Safety Decision'], ['Restore Safety Decision',0,'Model Required?'],
   ['Model Required?',0,'Ask Local Structured Model'], ['Ask Local Structured Model',0,'Validate Model Decision'],
@@ -1156,7 +1180,7 @@ const outboundConnections = connections(
 
 const inbound = workflow(
   'GETIT_MESSAGING_INBOUND_V1_14',
-  '[PRODUCTION DRY-RUN SAFE] Getit Messaging Inbound v1.20',
+  '[PRODUCTION DRY-RUN SAFE] Getit Messaging Inbound v1.22',
   inboundNodes,
   inboundConnections,
   { templateCredsSetupCompleted: true, getitBoundary: 'production-persist-decide-draft-partner-queue' },

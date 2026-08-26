@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { label } from "../../lib/format";
+import { supabase } from "../../lib/supabase";
 
 const when = (value) => value
   ? new Intl.DateTimeFormat("en-ZA", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))
@@ -13,11 +14,13 @@ const applicationName = (item) => item.application_type === "shop"
 
 export default function PartnerApplications({ data, api, onError, onToast, onNavigate }) {
   const applications = data.partnerApplications || [];
+  const catalogueSubmissions = data.partnerCatalogueSubmissions || [];
   const [type, setType] = useState("all");
   const [status, setStatus] = useState("open");
   const [selectedId, setSelectedId] = useState(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(null);
 
   const filtered = useMemo(() => applications.filter((item) => {
     const typeMatch = type === "all" || item.application_type === type;
@@ -27,6 +30,9 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   }), [applications, type, status]);
 
   const selected = applications.find((item) => item.id === selectedId) || filtered[0] || null;
+  const selectedCatalogues = selected
+    ? catalogueSubmissions.filter((item) => item.application_id === selected.id)
+    : [];
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -46,6 +52,25 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
       onError(error);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const downloadCatalogue = async (catalogue) => {
+    if (!catalogue?.storage_bucket || !catalogue?.storage_path || downloadBusy) return;
+    setDownloadBusy(catalogue.id);
+    try {
+      const { data: signed, error } = await supabase.storage
+        .from(catalogue.storage_bucket)
+        .createSignedUrl(catalogue.storage_path, 300, {
+          download: catalogue.original_file_name || "getit-partner-catalogue",
+        });
+      if (error || !signed?.signedUrl) throw error || new Error("Could not create a private download link.");
+      window.open(signed.signedUrl, "_blank", "noopener,noreferrer");
+      onToast("Private catalogue download opened. Treat shop files as untrusted until reviewed.");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setDownloadBusy(null);
     }
   };
 
@@ -139,6 +164,28 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
 
               {selected.application_type === "driver" && (
                 <div className="partner-warning">The applicant was told that they need their own working motorbike and that applying does not guarantee work while Getit is launching.</div>
+              )}
+              {selected.application_type === "shop" && selectedCatalogues.length > 0 && (
+                <div className="partner-catalogues">
+                  <span className="eyebrow">Private catalogue intake</span>
+                  {selectedCatalogues.map((catalogue) => (
+                    <div className="partner-warning" key={catalogue.id}>
+                      <strong>{catalogue.original_file_name || "Catalogue file"}</strong><br />
+                      {catalogue.catalogue_kind ? `${label(catalogue.catalogue_kind)} · ` : ""}{label(catalogue.status)}
+                      {catalogue.valid_from && catalogue.valid_to ? ` · ${catalogue.valid_from} to ${catalogue.valid_to}` : ""}
+                      {catalogue.expected_refresh_on ? ` · next update expected ${catalogue.expected_refresh_on}` : ""}
+                      {catalogue.upload_error_code ? ` · ${catalogue.upload_error_code}` : ""}
+                      {catalogue.storage_path && (
+                        <div className="partner-catalogue-actions">
+                          <button type="button" className="small-button" disabled={downloadBusy === catalogue.id} onClick={() => downloadCatalogue(catalogue)}>
+                            {downloadBusy === catalogue.id ? "Preparing…" : "Download privately"}
+                          </button>
+                          <button type="button" className="ghost-button" onClick={() => onNavigate("catalogue")}>Open catalogue manager</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
               <div className="partner-safety-note">Approving here records the review decision only. It does not create or activate a live shop or driver.</div>
 

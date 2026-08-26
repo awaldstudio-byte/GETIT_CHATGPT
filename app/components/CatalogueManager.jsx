@@ -408,12 +408,12 @@ export default function CatalogueManager({ onError, onToast }) {
         reason: "control_centre_publish",
         batch_id: selectedBatch.batch_id,
       });
-    }, "Catalogue batch published and public files refreshed");
+    }, "Catalogue batch published to the live date-filtered feed");
   };
 
   const publishFiles = () => run(
     () => invokeFunction("publish-catalogue", { reason: "manual_control_centre_refresh" }),
-    "Public catalogue files refreshed",
+    "Live catalogue feed refreshed",
   );
 
   const addManualItem = async (event) => {
@@ -503,7 +503,7 @@ export default function CatalogueManager({ onError, onToast }) {
             </a>
           )}
           <button type="button" className="primary-button" disabled={busy} onClick={publishFiles}>
-            {busy ? "Working…" : "Publish catalogue files"}
+            {busy ? "Working…" : "Refresh live catalogue"}
           </button>
         </div>
       </section>

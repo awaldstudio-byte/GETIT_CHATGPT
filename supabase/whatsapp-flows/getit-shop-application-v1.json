@@ -39,12 +39,23 @@
                 "max-chars": 120
               },
               {
-                "type": "TextArea",
+                "type": "Dropdown",
                 "name": "business_type",
-                "label": "What does it sell?",
-                "helper-text": "Example: groceries, takeaway food, clothing or hardware",
+                "label": "Main business type",
                 "required": true,
-                "max-length": 300
+                "data-source": [
+                  { "id": "grocery_general", "title": "Grocery / supermarket / general dealer" },
+                  { "id": "convenience_spaza", "title": "Convenience / spaza" },
+                  { "id": "butchery_fresh_food", "title": "Butchery / fresh food" },
+                  { "id": "bakery_takeaway", "title": "Bakery / restaurant / takeaway" },
+                  { "id": "pharmacy_health_beauty", "title": "Pharmacy / health / beauty" },
+                  { "id": "hardware_agri_garden", "title": "Hardware / building / agri / garden" },
+                  { "id": "veterinary_pet", "title": "Veterinary / pet supplies" },
+                  { "id": "clothing_homeware", "title": "Clothing / footwear / homeware" },
+                  { "id": "automotive_electronics", "title": "Automotive / electronics / appliances" },
+                  { "id": "licensed_restricted", "title": "Licensed liquor / tobacco" },
+                  { "id": "other", "title": "Other" }
+                ]
               },
               {
                 "type": "TextArea",
