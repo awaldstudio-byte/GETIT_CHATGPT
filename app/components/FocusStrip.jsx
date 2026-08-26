@@ -13,7 +13,7 @@ export default function FocusStrip({ data, activeTab, onNavigate }) {
     { id: 'payments', tab: 'payments', label: 'Waiting to pay', count: paymentWaiting, tone: paymentWaiting ? 'urgent' : 'quiet' },
     { id: 'locations', tab: 'map', label: 'Locations to check', count: locationsWaiting, tone: locationsWaiting ? 'attention' : 'quiet' },
     { id: 'help', tab: 'help', label: 'Needs help', count: helpWaiting, tone: helpWaiting ? 'danger' : 'quiet' },
-    { id: 'automation', tab: 'operations', label: 'Automation backlog', count: automationBacklog, tone: automationBacklog ? 'danger' : 'good' },
+    { id: 'automation', tab: 'automation', label: 'Automation backlog', count: automationBacklog, tone: automationBacklog ? 'danger' : 'good' },
     { id: 'messaging', tab: 'messaging', label: 'Messaging attention', count: messagingAttention, tone: messagingAttention ? 'danger' : 'good' },
     { id: 'applications', tab: 'applications', label: 'Applications waiting', count: applicationsWaiting, tone: applicationsWaiting ? 'attention' : 'quiet' },
   ];

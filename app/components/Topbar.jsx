@@ -16,6 +16,7 @@ export default function Topbar({
   locationCount,
   messagingCount,
   applicationsCount,
+  automationCount,
   activeTab,
   setActiveTab,
   refreshing,
@@ -30,6 +31,7 @@ export default function Topbar({
     ['catalogue', 'Find a price', 0],
     ['messaging', 'Messaging', messagingCount],
     ['applications', 'Shop manager', applicationsCount],
+    ['automation', 'Automation', automationCount],
     ['help', 'Needs help', helpCount],
   ];
 

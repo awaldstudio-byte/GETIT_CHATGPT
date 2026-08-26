@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import AutomationBacklog from "../components/AutomationBacklog";
 import CatalogueManager from "../components/CatalogueManager";
 import DriverBoard from "../components/DriverBoard";
 import FocusStrip from "../components/FocusStrip";
@@ -28,6 +29,7 @@ const EMPTY_DATA = {
   messagingDirectory: [],
   messagingHealth: null,
   partnerApplications: [],
+  automationEvents: [],
 };
 
 export default function DashboardPage() {
@@ -52,24 +54,28 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let mounted = true;
-
-    supabase.auth.getSession().then(({ data: result, error: sessionError }) => {
+    let redirectTimer = null;
+    const readinessTimer = window.setTimeout(() => {
       if (!mounted) return;
-      if (sessionError) setError(humanizeError(sessionError));
-      setSession(result.session);
       setAuthReady(true);
-      if (!result.session) router.replace("/login");
-    });
+      setSession(null);
+      redirectTimer = window.setTimeout(() => router.replace("/login"), 0);
+    }, 8_000);
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) return;
+      window.clearTimeout(readinessTimer);
       setSession(nextSession);
       setAuthReady(true);
-      if (!nextSession) router.replace("/login");
+      if (!nextSession) {
+        redirectTimer = window.setTimeout(() => router.replace("/login"), 0);
+      }
     });
 
     return () => {
       mounted = false;
+      window.clearTimeout(readinessTimer);
+      window.clearTimeout(redirectTimer);
       listener.subscription.unsubscribe();
       window.clearTimeout(toastTimerRef.current);
     };
@@ -187,6 +193,7 @@ export default function DashboardPage() {
   const locationCount = data.orderPins.filter((pin) => pin.location_quality !== "confirmed").length;
   const messagingCount = data.messagingInbox.filter((conversation) => conversation.requires_attention).length;
   const applicationsCount = data.partnerApplications.filter((application) => ["submitted", "reviewing"].includes(application.status)).length;
+  const automationCount = Number(data.health?.automation_backlog || 0);
 
   const childProps = useMemo(
     () => ({
@@ -221,6 +228,7 @@ export default function DashboardPage() {
         locationCount={locationCount}
         messagingCount={messagingCount}
         applicationsCount={applicationsCount}
+        automationCount={automationCount}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         refreshing={refreshing}
@@ -285,6 +293,8 @@ export default function DashboardPage() {
         <MessagingInbox {...childProps} />
       ) : activeTab === "applications" ? (
         <PartnerApplications {...childProps} />
+      ) : activeTab === "automation" ? (
+        <AutomationBacklog {...childProps} />
       ) : (
         <SupportQueue {...childProps} />
       )}

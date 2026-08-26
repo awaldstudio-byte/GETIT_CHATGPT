@@ -1,35 +1,49 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace("/dashboard");
+    let redirectTimer = null;
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "INITIAL_SESSION" && session) {
+        redirectTimer = window.setTimeout(() => {
+          window.location.replace("/dashboard");
+        }, 0);
+      }
     });
-  }, [router]);
+
+    return () => {
+      window.clearTimeout(redirectTimer);
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   async function signIn(event) {
     event.preventDefault();
     setLoading(true);
     setMessage("");
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       setMessage(error.message);
       setLoading(false);
       return;
     }
 
-    router.replace("/dashboard");
+    if (!data.session) {
+      setMessage("Sign-in completed without a staff session. Please try again.");
+      setLoading(false);
+      return;
+    }
+
+    window.location.assign("/dashboard");
   }
 
   return (
