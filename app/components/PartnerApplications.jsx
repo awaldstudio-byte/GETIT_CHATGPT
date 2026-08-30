@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { label } from "../../lib/format";
 import { supabase } from "../../lib/supabase";
+import MediaAttachment from "./MediaAttachment";
 
 const when = (value) => value
   ? new Intl.DateTimeFormat("en-ZA", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))
@@ -33,6 +34,9 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   const selectedCatalogues = selected
     ? catalogueSubmissions.filter((item) => item.application_id === selected.id)
     : [];
+  const selectedFiles = selected
+    ? (data.partnerApplicationFiles || []).filter((item) => item.application_id === selected.id)
+    : [];
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -44,6 +48,10 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
 
   const changeStatus = async (nextStatus) => {
     if (!selected || busy) return;
+    if (!note.trim()) {
+      onError(new Error("Add a private review note before changing this application."));
+      return;
+    }
     setBusy(true);
     try {
       await api.actions.reviewPartnerApplication(selected.id, nextStatus, note, selected.version);
@@ -187,6 +195,19 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
                   ))}
                 </div>
               )}
+              <section className="partner-application-files">
+                <div>
+                  <span className="eyebrow">Application evidence</span>
+                  <strong>{selectedFiles.length ? `${selectedFiles.length} secure file${selectedFiles.length === 1 ? "" : "s"}` : "No application file attached"}</strong>
+                </div>
+                {selectedFiles.length ? selectedFiles.map((file) => file.attachment ? (
+                  <MediaAttachment key={file.id} attachment={file.attachment} compact />
+                ) : (
+                  <div className="partner-warning" key={file.id}>The application file link exists, but its attachment record could not be loaded.</div>
+                )) : (
+                  <div className="partner-warning">This submission came through the older WhatsApp field flow and has no PDF or photo evidence attached. Review it manually before any decision.</div>
+                )}
+              </section>
               <div className="partner-safety-note">Approving here records the review decision only. It does not create or activate a live shop or driver.</div>
 
               <label className="partner-review-note">
@@ -196,9 +217,9 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
 
               <div className="partner-actions">
                 <button type="button" className="ghost-button" onClick={() => onNavigate("messaging")}>Open messaging</button>
-                <button type="button" className="small-button" disabled={busy} onClick={() => changeStatus("reviewing")}>Mark reviewing</button>
-                <button type="button" className="small-button danger-button" disabled={busy} onClick={() => changeStatus("rejected")}>Decline</button>
-                <button type="button" className="primary-button" disabled={busy} onClick={() => changeStatus("approved")}>Approve for onboarding</button>
+                <button type="button" className="small-button" disabled={busy || !note.trim()} onClick={() => changeStatus("reviewing")}>Mark reviewing</button>
+                <button type="button" className="small-button danger-button" disabled={busy || !note.trim()} onClick={() => changeStatus("rejected")}>Decline</button>
+                <button type="button" className="primary-button" disabled={busy || !note.trim()} onClick={() => changeStatus("approved")}>Approve for onboarding</button>
               </div>
             </section>
           )}

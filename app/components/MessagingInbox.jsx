@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dateTime, label, money } from "../../lib/format";
+import MediaAttachment from "./MediaAttachment";
 import MessageDeliveryStatus from "./MessageDeliveryStatus";
 
 const modeCopy = {
@@ -58,6 +59,14 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
     () => conversations.find((item) => item.conversation_id === selectedId) || null,
     [conversations, selectedId],
   );
+  const attachmentsByMessage = useMemo(() => {
+    const grouped = new Map();
+    for (const attachment of details?.attachments || []) {
+      if (!grouped.has(attachment.message_id)) grouped.set(attachment.message_id, []);
+      grouped.get(attachment.message_id).push(attachment);
+    }
+    return grouped;
+  }, [details?.attachments]);
 
   const filteredConversations = useMemo(() => {
     if (filter === "all") return conversations;
@@ -164,13 +173,13 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
   const clearConversation = async () => {
     if (!selected || busy) return;
     const confirmed = window.confirm(
-      `Start fresh with ${selected.customer_name}?\n\nThis clears the visible chat, AI memory, unread state, incidents and any active order draft. The customer's saved profile and real orders are kept.`,
+      `Reset Getit's conversation with ${selected.customer_name}?\n\nThis removes the Control Centre timeline, AI memory, unread state, incidents and any active draft. It keeps the customer's profile and submitted orders. It does not erase the separate chat history shown inside WhatsApp.`,
     );
     if (!confirmed) return;
     setBusy(true);
     setMenuOpen(false);
     try {
-      await api.actions.resetMessagingConversation(
+      const result = await api.actions.resetMessagingConversation(
         selected.conversation_id,
         selected.version,
         "Fresh start requested from Getit Control Centre",
@@ -178,8 +187,9 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
       markedReadRef.current.delete(selected.conversation_id);
       providerReadRef.current.delete(selected.conversation_id);
       setComposer("");
-      setDetails({ messages: [], decisions: [], handoffs: [], incidents: [], draft: null, recentOrders: details?.recentOrders || [] });
-      onToast("Chat cleared. The next message starts fresh.");
+      setDetails({ messages: [], attachments: [], decisions: [], handoffs: [], incidents: [], draft: null, recentOrders: details?.recentOrders || [] });
+      const removedMessages = Number(result?.removed_counts?.messages || 0);
+      onToast(`Getit reset complete${removedMessages ? ` — ${removedMessages} message${removedMessages === 1 ? "" : "s"} removed` : ""}. WhatsApp's own history is unchanged.`);
     } catch (error) {
       onError(error);
     } finally {
@@ -355,7 +365,7 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
                           {selected.mode !== "automation" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("automation"); }}>Enable AI</button>}
                           {selected.mode !== "paused" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("paused"); }}>Pause replies</button>}
                           {selected.customer_phone && <button type="button" role="menuitem" onClick={copyCustomerNumber}>Copy WhatsApp number</button>}
-                          <button type="button" role="menuitem" className="danger" onClick={clearConversation}>Clear chat & start fresh</button>
+                          <button type="button" role="menuitem" className="danger" onClick={clearConversation}>Reset Getit memory & timeline</button>
                         </div>
                       )}
                     </div>
@@ -364,19 +374,24 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
 
                 <div className="message-thread" aria-live="polite">
                   {loading && !details ? <div className="thread-loading">Loading conversation...</div> : null}
-                  {(details?.messages || []).map((message) => (
+                  {(details?.messages || []).map((message) => {
+                    const attachments = attachmentsByMessage.get(message.id) || [];
+                    return (
                     <article key={message.id} className={`message-bubble ${message.direction}`}>
                       <div className="message-meta">
                         <strong>{message.direction === "inbound" ? selected.customer_name : "Getit"}</strong>
                         <time>{dateTime(message.created_at)}</time>
                       </div>
-                      <p>{message.body || `[${label(message.message_type)} message]`}</p>
+                      {message.body ? <p>{message.body}</p> : attachments.length === 0 ? <p>[{label(message.message_type)} message]</p> : null}
+                      {attachments.map((attachment) => (
+                        <MediaAttachment key={attachment.id} attachment={attachment} compact />
+                      ))}
                       <div className="message-status">
                         {message.direction === "outbound" ? <MessageDeliveryStatus message={message} /> : <span>Received</span>}
                         {message.error_code && <b>{label(message.error_code)}</b>}
                       </div>
                     </article>
-                  ))}
+                  );})}
                   {details && !details.messages.length && <div className="thread-loading">No messages recorded yet.</div>}
                 </div>
 

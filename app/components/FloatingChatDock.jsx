@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { label } from "../../lib/format";
+import MediaAttachment from "./MediaAttachment";
 import MessageDeliveryStatus from "./MessageDeliveryStatus";
 
 const GROUPS = {
@@ -152,6 +153,14 @@ export default function FloatingChatDock({ data, api, onError, onToast, onNaviga
   const totalAttention = Object.values(stats).reduce((sum, item) => sum + item.attention, 0);
   const soundReady = useAttentionSound(totalAttention);
   const selected = conversations.find((item) => item.conversation_id === selectedId) || null;
+  const attachmentsByMessage = useMemo(() => {
+    const grouped = new Map();
+    for (const attachment of details?.attachments || []) {
+      if (!grouped.has(attachment.message_id)) grouped.set(attachment.message_id, []);
+      grouped.get(attachment.message_id).push(attachment);
+    }
+    return grouped;
+  }, [details?.attachments]);
 
   const visibleChats = useMemo(() => {
     if (!openType) return [];
@@ -305,11 +314,11 @@ export default function FloatingChatDock({ data, api, onError, onToast, onNaviga
   const clearConversation = async () => {
     if (!selected || busy) return;
     const name = selected.participant_name || selected.customer_name || "this chat";
-    if (!window.confirm(`Start fresh with ${name}?\n\nThis clears the visible chat and AI memory, including any active order draft.`)) return;
+    if (!window.confirm(`Reset Getit's conversation with ${name}?\n\nThis removes the Control Centre timeline and AI memory, including any active draft. It does not erase the separate chat history shown inside WhatsApp.`)) return;
     setBusy(true);
     setMenuOpen(false);
     try {
-      await api.actions.resetMessagingConversation(
+      const result = await api.actions.resetMessagingConversation(
         selected.conversation_id,
         selected.version,
         "Fresh start requested from floating chat dock",
@@ -317,8 +326,9 @@ export default function FloatingChatDock({ data, api, onError, onToast, onNaviga
       markedReadRef.current.delete(selected.conversation_id);
       providerReadRef.current.delete(selected.conversation_id);
       setComposer("");
-      setDetails({ messages: [], decisions: [], handoffs: [], incidents: [], draft: null, recentOrders: details?.recentOrders || [] });
-      onToast("Chat cleared. The next message starts fresh.");
+      setDetails({ messages: [], attachments: [], decisions: [], handoffs: [], incidents: [], draft: null, recentOrders: details?.recentOrders || [] });
+      const removedMessages = Number(result?.removed_counts?.messages || 0);
+      onToast(`Getit reset complete${removedMessages ? ` — ${removedMessages} message${removedMessages === 1 ? "" : "s"} removed` : ""}. WhatsApp's own history is unchanged.`);
     } catch (error) {
       onError(error);
     } finally {
@@ -453,7 +463,7 @@ export default function FloatingChatDock({ data, api, onError, onToast, onNaviga
                         {selected?.mode !== "automation" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("automation"); }}>Enable AI</button>}
                         {selected?.mode !== "paused" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("paused"); }}>Pause replies</button>}
                         {(selected?.participant_phone || selected?.customer_phone) && <button type="button" role="menuitem" onClick={copyParticipantNumber}>Copy WhatsApp number</button>}
-                        <button type="button" role="menuitem" className="danger" onClick={clearConversation}>Clear chat & start fresh</button>
+                        <button type="button" role="menuitem" className="danger" onClick={clearConversation}>Reset Getit memory & timeline</button>
                       </div>
                     )}
                   </div>
@@ -463,12 +473,17 @@ export default function FloatingChatDock({ data, api, onError, onToast, onNaviga
 
               <div className="mini-message-thread" aria-live="polite">
                 {loading && !details ? <span className="mini-thread-loading">Opening chat…</span> : null}
-                {(details?.messages || []).map((message) => (
+                {(details?.messages || []).map((message) => {
+                  const attachments = attachmentsByMessage.get(message.id) || [];
+                  return (
                   <article className={`mini-message ${message.direction}`} key={message.id}>
-                    <p>{message.body || `[${label(message.message_type)}]`}</p>
+                    {message.body ? <p>{message.body}</p> : attachments.length === 0 ? <p>[{label(message.message_type)}]</p> : null}
+                    {attachments.map((attachment) => (
+                      <MediaAttachment key={attachment.id} attachment={attachment} compact />
+                    ))}
                     <span>{compactTime(message.created_at)} <MessageDeliveryStatus message={message} compact /></span>
                   </article>
-                ))}
+                );})}
                 {details && !details.messages.length && <span className="mini-thread-loading">No messages yet. Start the conversation below.</span>}
                 <div ref={threadEndRef} />
               </div>
