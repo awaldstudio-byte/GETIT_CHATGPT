@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { label } from "../../lib/format";
-import { fetchMessagingAttachment } from "../../lib/messagingMedia";
+import { fetchMessagingAttachment, fetchMessagingAttachmentUrls } from "../../lib/messagingMedia";
 
 const fileSize = (value) => {
   const bytes = Number(value);
@@ -14,9 +14,11 @@ const fileSize = (value) => {
 
 export default function MediaAttachment({ attachment, compact = false }) {
   const [objectUrl, setObjectUrl] = useState(null);
+  const [downloadUrl, setDownloadUrl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const mediaRef = useRef(null);
+  const mime = String(attachment.mime_type || "").split(";")[0].toLowerCase();
 
   useEffect(() => {
     let cancelled = false;
@@ -24,12 +26,21 @@ export default function MediaAttachment({ attachment, compact = false }) {
     setLoading(true);
     setError(null);
     setObjectUrl(null);
+    setDownloadUrl(null);
 
-    fetchMessagingAttachment(attachment.id)
-      .then((blob) => {
-        if (cancelled) return;
+    const open = attachment.retrieval_status === "available" && (mime.startsWith("audio/") || mime.startsWith("video/"))
+      ? fetchMessagingAttachmentUrls(attachment.id).then((urls) => ({ previewUrl: urls.preview_url, downloadUrl: urls.download_url }))
+      : fetchMessagingAttachment(attachment.id).then((blob) => {
+        if (cancelled) return { previewUrl: null, downloadUrl: null };
         nextUrl = URL.createObjectURL(blob);
-        setObjectUrl(nextUrl);
+        return { previewUrl: nextUrl, downloadUrl: nextUrl };
+      });
+
+    open
+      .then((urls) => {
+        if (cancelled) return;
+        setObjectUrl(urls.previewUrl);
+        setDownloadUrl(urls.downloadUrl);
       })
       .catch((nextError) => {
         if (!cancelled) setError(nextError.message);
@@ -42,14 +53,13 @@ export default function MediaAttachment({ attachment, compact = false }) {
       cancelled = true;
       if (nextUrl) URL.revokeObjectURL(nextUrl);
     };
-  }, [attachment.id, attachment.archived_at, attachment.retrieval_status]);
+  }, [attachment.id, attachment.archived_at, attachment.retrieval_status, mime]);
 
   useEffect(() => {
     if (!objectUrl || !mediaRef.current) return;
     mediaRef.current.load();
   }, [objectUrl]);
 
-  const mime = String(attachment.mime_type || "").split(";")[0].toLowerCase();
   const name = attachment.file_name || `${label(attachment.attachment_type)} attachment`;
   const meta = useMemo(() => [
     label(attachment.attachment_type),
@@ -61,7 +71,7 @@ export default function MediaAttachment({ attachment, compact = false }) {
     <section className={`media-attachment ${compact ? "compact" : ""}`}>
       <div className="media-attachment-heading">
         <div><strong>{name}</strong><span>{meta}</span></div>
-        {objectUrl && <a href={objectUrl} download={name} className="small-button">Download</a>}
+        {downloadUrl && <a href={downloadUrl} download={name} className="small-button">Download</a>}
       </div>
       {attachment.caption && <p className="media-caption">{attachment.caption}</p>}
       {loading ? (

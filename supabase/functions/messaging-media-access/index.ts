@@ -31,6 +31,7 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   let attachmentId = url.searchParams.get("attachment_id") || "";
   let download = url.searchParams.get("download") === "1";
+  const signed = url.searchParams.get("signed") === "1";
   if (req.method === "POST") {
     try {
       const body = await req.json();
@@ -60,6 +61,28 @@ Deno.serve(async (req: Request) => {
 
   const fileName = safeString(access.file_name, 180) || `getit-${access.attachment_type || "attachment"}-${attachmentId}`;
   const requestedMime = baseMime(safeString(access.mime_type, 160)) || "application/octet-stream";
+  if (signed) {
+    if (access.retrieval_status !== "available" || !access.storage_bucket || !access.storage_path) {
+      return json(req, 409, { ok: false, code: "ARCHIVED_MEDIA_REQUIRED", request_id: requestId });
+    }
+    const service = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    const [preview, downloadable] = await Promise.all([
+      service.storage.from(access.storage_bucket).createSignedUrl(access.storage_path, 900),
+      service.storage.from(access.storage_bucket).createSignedUrl(access.storage_path, 900, { download: fileName }),
+    ]);
+    if (preview.error || downloadable.error || !preview.data?.signedUrl || !downloadable.data?.signedUrl) {
+      return json(req, 503, { ok: false, code: "ARCHIVED_MEDIA_URL_UNAVAILABLE", request_id: requestId });
+    }
+    return json(req, 200, {
+      ok: true,
+      attachment_id: attachmentId,
+      preview_url: preview.data.signedUrl,
+      download_url: downloadable.data.signedUrl,
+      mime_type: safeString(access.mime_type, 160) || requestedMime,
+      expires_in: 900,
+      request_id: requestId,
+    });
+  }
   let bytes: Uint8Array;
   let mime = requestedMime;
 
@@ -113,4 +136,3 @@ Deno.serve(async (req: Request) => {
     },
   });
 });
-
