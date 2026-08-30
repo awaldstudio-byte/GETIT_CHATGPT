@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { label } from "../../lib/format";
 import { fetchMessagingAttachment } from "../../lib/messagingMedia";
 
@@ -16,6 +16,7 @@ export default function MediaAttachment({ attachment, compact = false }) {
   const [objectUrl, setObjectUrl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const mediaRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +44,11 @@ export default function MediaAttachment({ attachment, compact = false }) {
     };
   }, [attachment.id, attachment.archived_at, attachment.retrieval_status]);
 
+  useEffect(() => {
+    if (!objectUrl || !mediaRef.current) return;
+    mediaRef.current.load();
+  }, [objectUrl]);
+
   const mime = String(attachment.mime_type || "").split(";")[0].toLowerCase();
   const name = attachment.file_name || `${label(attachment.attachment_type)} attachment`;
   const meta = useMemo(() => [
@@ -65,9 +71,15 @@ export default function MediaAttachment({ attachment, compact = false }) {
       ) : mime.startsWith("image/") ? (
         <a href={objectUrl} target="_blank" rel="noreferrer"><img src={objectUrl} alt={attachment.caption || name} loading="lazy" /></a>
       ) : mime.startsWith("audio/") ? (
-        <audio controls preload="metadata" src={objectUrl}>Your browser cannot play this voice note.</audio>
+        <audio key={objectUrl} ref={mediaRef} controls preload="metadata">
+          <source src={objectUrl} type={attachment.mime_type || "audio/ogg"} />
+          Your browser cannot play this voice note.
+        </audio>
       ) : mime.startsWith("video/") ? (
-        <video controls preload="metadata" src={objectUrl}>Your browser cannot play this video.</video>
+        <video key={objectUrl} ref={mediaRef} controls preload="metadata">
+          <source src={objectUrl} type={attachment.mime_type || "video/mp4"} />
+          Your browser cannot play this video.
+        </video>
       ) : mime === "application/pdf" ? (
         <a href={objectUrl} target="_blank" rel="noreferrer" className="media-open-file">Open PDF securely</a>
       ) : (
