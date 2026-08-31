@@ -267,7 +267,7 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
         applicationId: selected.id,
         title: instruction,
         requirementLevel: instructionLevel,
-        guidance: "Answer the shop's questions first, then return naturally to this item. Ask one small relevant question at a time.",
+        guidance: `Answer the ${selected.application_type === "driver" ? "driver's" : "shop's"} questions first, then return naturally to this item. Ask one small relevant question at a time.`,
       });
       setInstruction("");
       setInstructionLevel("optional");
@@ -282,7 +282,7 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   const startGuidedOnboarding = async () => {
     if (!selected || !selectedConversation || busy || onboardingStarted) return;
     const confirmed = window.confirm(
-      `Start live guided onboarding with ${applicationName(selected)}?\n\nThis sends one approval message, releases only this conversation to automation, and lets the AI collect one onboarding item at a time. AI-captured answers stay pending staff review and cannot activate the shop.`,
+      `Start live guided onboarding with ${applicationName(selected)}?\n\nThis sends one approval message, releases only this conversation to automation, and lets the AI collect one onboarding item at a time. AI-captured answers stay pending staff review and cannot activate the ${selected.application_type === "driver" ? "driver" : "shop"}.`,
     );
     if (!confirmed) return;
     setBusy(true);
@@ -485,8 +485,10 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
               )}
               <div className="partner-safety-note">
                 {selected.status === "approved"
-                  ? "Approval is complete. Starting guided onboarding is a separate confirmed action: it sends one message and enables AI only for this shop. AI-captured answers remain pending staff review and cannot activate the shop."
-                  : "Approval prepares a visible guided-onboarding checklist. It does not message the shop, activate it, publish a catalogue, or enable restricted products until staff separately starts guided onboarding."}
+                  ? `Approval is complete. Starting guided onboarding is a separate confirmed action: it sends one message and enables AI only for this ${selected.application_type}. AI-captured answers remain pending staff review and cannot activate the ${selected.application_type}.`
+                  : selected.application_type === "driver"
+                    ? "Approval prepares a visible driver-readiness checklist. It does not message or activate the driver, promise work, or agree pay or bike arrangements until staff separately starts guided onboarding and completes review."
+                    : "Approval prepares a visible guided-onboarding checklist. It does not message the shop, activate it, publish a catalogue, or enable restricted products until staff separately starts guided onboarding."}
               </div>
 
               <label className="partner-review-note">
