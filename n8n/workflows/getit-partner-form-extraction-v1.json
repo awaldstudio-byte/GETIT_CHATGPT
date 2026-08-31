@@ -1,0 +1,141 @@
+{
+  "id": "GETIT_PARTNER_FORM_EXTRACTION_V1",
+  "name": "[NO-SEND] Getit Partner Form Extraction v1.0",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] } },
+      "id": "every-minute",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-760, -80]
+    },
+    {
+      "parameters": {},
+      "id": "run-manually",
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-760, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/functions/v1/partner-application-extraction-source",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": { "worker_id": "getit-partner-form-worker-v1" },
+        "options": {
+          "timeout": 45000,
+          "response": { "response": { "fullResponse": false, "neverError": true, "responseFormat": "json" } }
+        }
+      },
+      "id": "claim-and-fetch-form",
+      "name": "Claim and Fetch Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-500, 10],
+      "credentials": { "httpHeaderAuth": { "id": "q4ozFODidcOtHk7Y", "name": "Getit Supabase Secret Key" } },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const source=$input.first().json;\nif(source?.ok!==true||!source?.job?.job_id)return [];\nconst documents=Array.isArray(source.job.documents)?source.job.documents:[];\nif(!documents.length)throw new Error('Claimed extraction job has no documents.');\nreturn [{json:{job_id:source.job.job_id,application_id:source.job.application_id,documents}}];"
+      },
+      "id": "prepare-extraction",
+      "name": "Prepare Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 10]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8788/extract-partner-form",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ documents:$json.documents, allow_vision:true }) }}",
+        "options": {
+          "timeout": 900000,
+          "response": { "response": { "fullResponse": false, "neverError": true, "responseFormat": "json" } }
+        }
+      },
+      "id": "extract-partner-form",
+      "name": "Extract Partner Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [20, 10],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/complete_partner_application_extraction_job_v1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_job_id:$(\"Prepare Extraction\").item.json.job_id, p_ok:$json.ok===true, p_fields:Array.isArray($json.fields)?$json.fields:[], p_error_code:$json.ok===true?null:String($json.detail||$json.code||$json.error?.message||\"EXTRACTION_FAILED\").slice(0,160) }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "fullResponse": false, "neverError": false, "responseFormat": "json" } }
+        }
+      },
+      "id": "complete-extraction-job",
+      "name": "Complete Extraction Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [300, 10],
+      "credentials": { "httpHeaderAuth": { "id": "q4ozFODidcOtHk7Y", "name": "Getit Supabase Secret Key" } },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://uoqgbaqffmxdnenxfdjr.supabase.co/rest/v1/rpc/prune_partner_application_extraction_candidates_v1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_job_id:$(\"Prepare Extraction\").item.json.job_id, p_field_keys:(Array.isArray($(\"Extract Partner Form\").item.json.fields)?$(\"Extract Partner Form\").item.json.fields:[]).map(item=>item.field_key).filter(Boolean) }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "fullResponse": false, "neverError": false, "responseFormat": "json" } }
+        }
+      },
+      "id": "prune-stale-candidates",
+      "name": "Prune Stale Candidates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [560, 10],
+      "credentials": { "httpHeaderAuth": { "id": "q4ozFODidcOtHk7Y", "name": "Getit Supabase Secret Key" } },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    }
+  ],
+  "connections": {
+    "Every Minute": { "main": [[{ "node": "Claim and Fetch Form", "type": "main", "index": 0 }]] },
+    "Run Manually": { "main": [[{ "node": "Claim and Fetch Form", "type": "main", "index": 0 }]] },
+    "Claim and Fetch Form": { "main": [[{ "node": "Prepare Extraction", "type": "main", "index": 0 }]] },
+    "Prepare Extraction": { "main": [[{ "node": "Extract Partner Form", "type": "main", "index": 0 }]] },
+    "Extract Partner Form": { "main": [[{ "node": "Complete Extraction Job", "type": "main", "index": 0 }]] },
+    "Complete Extraction Job": { "main": [[{ "node": "Prune Stale Candidates", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "saveDataErrorExecution": "all", "saveDataSuccessExecution": "all", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "meta": { "getitPurpose": "No-send extraction of archived shop application forms into staff-reviewable candidates." },
+  "tags": []
+}

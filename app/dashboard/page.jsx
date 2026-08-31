@@ -29,6 +29,12 @@ const EMPTY_DATA = {
   messagingDirectory: [],
   messagingHealth: null,
   partnerApplications: [],
+  partnerCatalogueSubmissions: [],
+  partnerApplicationFiles: [],
+  partnerApplicationFieldDefinitions: [],
+  partnerApplicationFieldValues: [],
+  partnerApplicationExtractionJobs: [],
+  partnerOnboardingRequirements: [],
   automationEvents: [],
 };
 

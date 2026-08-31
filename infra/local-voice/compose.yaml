@@ -10,6 +10,8 @@ services:
       VOICE_COMPUTE_TYPE: int8
       VOICE_CPU_THREADS: "4"
       VOICE_MAX_SECONDS: "300"
+      DOCUMENT_OLLAMA_URL: "http://host.docker.internal:11434/api/chat"
+      DOCUMENT_VISION_MODEL: "qwen3.5:9b"
     ports:
       - "127.0.0.1:8788:8788"
     volumes:

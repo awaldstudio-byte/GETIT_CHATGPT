@@ -12,8 +12,9 @@
     "test:workflows": "pnpm workflows:build && pnpm workflows:validate",
     "test:decisions": "node n8n/tools/test-grounded-decision-regressions.mjs",
     "test:catalogue-security": "node n8n/tools/test-partner-catalogue-security.mjs",
+    "test:partner-form": "node n8n/tools/test-partner-form-extraction.mjs",
     "test:safety:ci": "node n8n/tools/test-grounded-decision-regressions.mjs --deterministic-only",
-    "test:ci": "pnpm test:workflows && pnpm test:catalogue-security && pnpm test:safety:ci && pnpm build"
+    "test:ci": "pnpm test:workflows && pnpm test:catalogue-security && pnpm test:partner-form && pnpm test:safety:ci && pnpm build"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",

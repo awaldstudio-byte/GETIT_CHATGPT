@@ -13,6 +13,148 @@ const applicationName = (item) => item.application_type === "shop"
   ? item.business_name || "Unnamed shop"
   : item.applicant_name || "Driver applicant";
 
+const requirementLabel = {
+  required: "Required",
+  conditional: "Only if applicable",
+  optional: "Optional",
+};
+
+const sectionLabel = {
+  quick_application: "Quick application",
+  shop_profile: "Shop profile",
+  hours: "Trading hours",
+  catalogue: "Catalogue preferences",
+  agreement: "Agreement",
+};
+
+function PartnerFieldReviewRow({ applicationId, definition, value, api, onError, onToast }) {
+  const originalText = value?.value_text || "";
+  const [draft, setDraft] = useState(originalText);
+  const [note, setNote] = useState(value?.staff_note || "");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDraft(value?.value_text || "");
+    setNote(value?.staff_note || "");
+  }, [value?.version, value?.value_text, value?.staff_note]);
+
+  const save = async (verificationStatus) => {
+    if (busy) return;
+    if (verificationStatus === "verified" && !draft.trim()) {
+      onError(new Error("Add the value before verifying this field."));
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.actions.reviewPartnerApplicationField({
+        applicationId,
+        fieldKey: definition.field_key,
+        valueText: draft,
+        valueJson: draft === originalText ? value?.value_json || null : null,
+        verificationStatus,
+        staffNote: note,
+        expectedVersion: value?.version || 0,
+      });
+      onToast(verificationStatus === "verified" ? `${definition.field_label} verified` : `${definition.field_label} rejected`);
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stateText = value
+    ? value.verification_status === "verified" ? "Verified"
+      : value.verification_status === "rejected" ? "Rejected"
+        : `Check extracted value${value.confidence != null ? ` · ${Math.round(Number(value.confidence) * 100)}% confidence` : ""}`
+    : definition.requirement_level === "optional" ? "Optional — not supplied"
+      : definition.requirement_level === "conditional" ? "Only if applicable — not supplied"
+        : "Required — no value extracted";
+
+  return (
+    <article className={`partner-field-row ${value?.verification_status || "missing"}`}>
+      <div className="partner-field-heading">
+        <div>
+          <strong>{definition.field_label}</strong>
+          <small>{stateText}</small>
+        </div>
+        <span className={`partner-requirement ${definition.requirement_level}`}>{requirementLabel[definition.requirement_level]}</span>
+      </div>
+      <textarea
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder={definition.requirement_level === "optional" ? "Leave blank if they did not supply it" : "Enter or correct the value"}
+        maxLength={4000}
+        rows={draft.length > 140 ? 3 : 2}
+      />
+      {value?.evidence_text && <small className="partner-field-evidence">Source: {value.evidence_text}{value.source_page ? ` · page ${value.source_page}` : ""}</small>}
+      {(value || draft.trim()) && (
+        <div className="partner-field-actions">
+          <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional staff note" maxLength={2000} />
+          {value && <button type="button" className="ghost-button" disabled={busy} onClick={() => save("rejected")}>Reject</button>}
+          <button type="button" className="small-button" disabled={busy || !draft.trim()} onClick={() => save("verified")}>{busy ? "Saving…" : "Save & verify"}</button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function OnboardingRequirementRow({ item, api, onError, onToast }) {
+  const [status, setStatus] = useState(item.status);
+  const [value, setValue] = useState(item.current_value || "");
+  const [note, setNote] = useState(item.staff_note || "");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setStatus(item.status);
+    setValue(item.current_value || "");
+    setNote(item.staff_note || "");
+  }, [item.version, item.status, item.current_value, item.staff_note]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.actions.updatePartnerOnboardingRequirement({
+        requirementId: item.id,
+        status,
+        currentValue: value,
+        staffNote: note,
+        expectedVersion: item.version,
+      });
+      onToast("Onboarding checklist updated");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className={`onboarding-requirement ${item.requirement_level}`}>
+      <header>
+        <div><strong>{item.title}</strong><small>{requirementLabel[item.requirement_level]}</small></div>
+        <select value={status} onChange={(event) => setStatus(event.target.value)} aria-label={`${item.title} status`}>
+          <option value="not_started">Not started</option>
+          <option value="requested">Requested</option>
+          <option value="needs_guidance">Customer needs guidance</option>
+          <option value="partial">Partly received</option>
+          <option value="received_pending_review">Received — check it</option>
+          <option value="verified">Verified</option>
+          <option value="not_applicable">Not applicable</option>
+          <option value="blocked">Blocked</option>
+          <option value="completed">Completed</option>
+        </select>
+      </header>
+      {item.guidance && <p>{item.guidance}</p>}
+      <input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Current answer or progress" maxLength={4000} />
+      <div className="partner-field-actions">
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Private staff note" maxLength={2000} />
+        <button type="button" className="small-button" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
+      </div>
+    </article>
+  );
+}
+
 export default function PartnerApplications({ data, api, onError, onToast, onNavigate }) {
   const applications = data.partnerApplications || [];
   const catalogueSubmissions = data.partnerCatalogueSubmissions || [];
@@ -22,6 +164,9 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(null);
+  const [showOptional, setShowOptional] = useState(false);
+  const [instruction, setInstruction] = useState("");
+  const [instructionLevel, setInstructionLevel] = useState("optional");
 
   const filtered = useMemo(() => applications.filter((item) => {
     const typeMatch = type === "all" || item.application_type === type;
@@ -37,6 +182,25 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   const selectedFiles = selected
     ? (data.partnerApplicationFiles || []).filter((item) => item.application_id === selected.id)
     : [];
+  const selectedDefinitions = selected
+    ? (data.partnerApplicationFieldDefinitions || []).filter((item) => item.application_type === selected.application_type)
+    : [];
+  const selectedValues = selected
+    ? (data.partnerApplicationFieldValues || []).filter((item) => item.application_id === selected.id)
+    : [];
+  const selectedValueMap = new Map(selectedValues.map((item) => [item.field_key, item]));
+  const selectedExtractionJob = selected
+    ? (data.partnerApplicationExtractionJobs || []).find((item) => item.application_id === selected.id) || null
+    : null;
+  const selectedRequirements = selected
+    ? (data.partnerOnboardingRequirements || []).filter((item) => item.application_id === selected.id)
+    : [];
+  const requiredDefinitions = selectedDefinitions.filter((item) => item.requirement_level === "required");
+  const unresolvedRequired = requiredDefinitions.filter((item) => selectedValueMap.get(item.field_key)?.verification_status !== "verified");
+  const visibleDefinitions = selectedDefinitions.filter((item) => {
+    if (item.requirement_level !== "optional") return true;
+    return showOptional || selectedValueMap.has(item.field_key);
+  });
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -55,7 +219,42 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
     setBusy(true);
     try {
       await api.actions.reviewPartnerApplication(selected.id, nextStatus, note, selected.version);
+      if (nextStatus === "approved") setStatus("approved");
+      if (nextStatus === "rejected") setStatus("rejected");
       onToast(nextStatus === "approved" ? "Application approved for onboarding" : nextStatus === "rejected" ? "Application declined" : "Application marked for review");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const queueExtraction = async () => {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      await api.actions.queuePartnerApplicationExtraction(selected.id);
+      onToast("Form extraction queued — no customer message was sent");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addInstruction = async () => {
+    if (!selected || !instruction.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.actions.addPartnerOnboardingRequirement({
+        applicationId: selected.id,
+        title: instruction,
+        requirementLevel: instructionLevel,
+        guidance: "Answer the shop's questions first, then return naturally to this item. Ask one small relevant question at a time.",
+      });
+      setInstruction("");
+      setInstructionLevel("optional");
+      onToast("Onboarding instruction added — it has not been sent to the shop");
     } catch (error) {
       onError(error);
     } finally {
@@ -208,7 +407,45 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
                   <div className="partner-warning">This submission came through the older WhatsApp field flow and has no PDF or photo evidence attached. Review it manually before any decision.</div>
                 )}
               </section>
-              <div className="partner-safety-note">Approving here records the review decision only. It does not create or activate a live shop or driver.</div>
+              {selected.application_type === "shop" && (
+                <section className="partner-form-review">
+                  <header>
+                    <div>
+                      <span className="eyebrow">Extracted application details</span>
+                      <strong>{selectedValues.length ? `${selectedValues.length} field${selectedValues.length === 1 ? "" : "s"} ready to check` : "No fields extracted yet"}</strong>
+                      <small>{unresolvedRequired.length} required field{unresolvedRequired.length === 1 ? "" : "s"} still need verification. Optional blanks do not block approval.</small>
+                    </div>
+                    <div className="partner-form-actions">
+                      <button type="button" className="ghost-button" onClick={() => setShowOptional((value) => !value)}>{showOptional ? "Hide blank optional fields" : "Show all optional fields"}</button>
+                      <button type="button" className="small-button" disabled={busy || selectedExtractionJob?.status === "processing" || selectedExtractionJob?.status === "pending"} onClick={queueExtraction}>
+                        {selectedExtractionJob?.status === "processing" ? "Extracting…" : selectedExtractionJob?.status === "pending" ? "Extraction queued" : selectedValues.length ? "Extract again" : "Extract form details"}
+                      </button>
+                    </div>
+                  </header>
+                  {selectedExtractionJob?.status === "failed" && <div className="partner-warning">Extraction needs another try: {selectedExtractionJob.error_code || "the local document service did not complete"}.</div>}
+                  {Object.entries(sectionLabel).map(([sectionKey, title]) => {
+                    const sectionFields = visibleDefinitions.filter((item) => item.section_key === sectionKey);
+                    if (!sectionFields.length) return null;
+                    return (
+                      <div className="partner-field-section" key={sectionKey}>
+                        <h3>{title}</h3>
+                        {sectionFields.map((definition) => (
+                          <PartnerFieldReviewRow
+                            key={definition.field_key}
+                            applicationId={selected.id}
+                            definition={definition}
+                            value={selectedValueMap.get(definition.field_key)}
+                            api={api}
+                            onError={onError}
+                            onToast={onToast}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                </section>
+              )}
+              <div className="partner-safety-note">Approval prepares a visible guided-onboarding checklist only. It does not message the shop, activate it, publish a catalogue, or enable restricted products.</div>
 
               <label className="partner-review-note">
                 <span>Private review note</span>
@@ -219,8 +456,37 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
                 <button type="button" className="ghost-button" onClick={() => onNavigate("messaging")}>Open messaging</button>
                 <button type="button" className="small-button" disabled={busy || !note.trim()} onClick={() => changeStatus("reviewing")}>Mark reviewing</button>
                 <button type="button" className="small-button danger-button" disabled={busy || !note.trim()} onClick={() => changeStatus("rejected")}>Decline</button>
-                <button type="button" className="primary-button" disabled={busy || !note.trim()} onClick={() => changeStatus("approved")}>Approve for onboarding</button>
+                <button type="button" className="primary-button" disabled={busy || !note.trim() || (selected.application_type === "shop" && unresolvedRequired.length > 0)} onClick={() => changeStatus("approved")}>Approve & prepare onboarding</button>
               </div>
+
+              {selectedRequirements.length > 0 && (
+                <section className="partner-onboarding-workspace">
+                  <header>
+                    <div>
+                      <span className="eyebrow">Guided onboarding</span>
+                      <h3>Procedure checklist</h3>
+                      <small>{selectedRequirements.filter((item) => item.requirement_level === "required" && !["verified","completed","not_applicable"].includes(item.status)).length} required item(s) remaining. Optional items never block progress.</small>
+                    </div>
+                    <span className="tag application-reviewing">No customer message started</span>
+                  </header>
+                  {selectedRequirements.map((item) => (
+                    <OnboardingRequirementRow key={item.id} item={item} api={api} onError={onError} onToast={onToast} />
+                  ))}
+                  <div className="onboarding-instruction">
+                    <strong>Add an onboarding instruction</strong>
+                    <p>This is separate from the private review note. It becomes a tracked procedure item; nothing is sent automatically yet.</p>
+                    <div>
+                      <input value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Example: Ask whether they want to share a menu, photos or a website link" maxLength={160} />
+                      <select value={instructionLevel} onChange={(event) => setInstructionLevel(event.target.value)}>
+                        <option value="optional">Optional</option>
+                        <option value="conditional">Only if applicable</option>
+                        <option value="required">Required</option>
+                      </select>
+                      <button type="button" className="small-button" disabled={busy || !instruction.trim()} onClick={addInstruction}>Add</button>
+                    </div>
+                  </div>
+                </section>
+              )}
             </section>
           )}
         </div>
