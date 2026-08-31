@@ -7,6 +7,7 @@ export default function FocusStrip({ data, activeTab, onNavigate }) {
   const messagingAttention = Number(data.messagingHealth?.attention_count || 0) +
     data.messagingInbox.reduce((sum, conversation) => sum + Number(conversation.unread_count || 0), 0);
   const applicationsWaiting = data.partnerApplications.filter((application) => ['submitted', 'reviewing'].includes(application.status)).length;
+  const launchQueueWaiting = data.launchQueue.filter((entry) => entry.entry_type === 'customer_waitlist' && entry.status === 'active').length;
 
   const items = [
     { id: 'drivers', tab: 'operations', label: 'Drivers available', count: availableDrivers, tone: availableDrivers ? 'good' : 'quiet' },
@@ -15,6 +16,7 @@ export default function FocusStrip({ data, activeTab, onNavigate }) {
     { id: 'help', tab: 'help', label: 'Needs help', count: helpWaiting, tone: helpWaiting ? 'danger' : 'quiet' },
     { id: 'automation', tab: 'automation', label: 'Automation backlog', count: automationBacklog, tone: automationBacklog ? 'danger' : 'good' },
     { id: 'messaging', tab: 'messaging', label: 'Messaging attention', count: messagingAttention, tone: messagingAttention ? 'danger' : 'good' },
+    { id: 'launch-queue', tab: 'launch_queue', label: 'Active waitlist', count: launchQueueWaiting, tone: launchQueueWaiting ? 'attention' : 'quiet' },
     { id: 'applications', tab: 'applications', label: 'Applications waiting', count: applicationsWaiting, tone: applicationsWaiting ? 'attention' : 'quiet' },
   ];
 

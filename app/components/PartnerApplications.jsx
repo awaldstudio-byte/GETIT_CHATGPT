@@ -208,6 +208,10 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
   const selectedRequirements = selected
     ? (data.partnerOnboardingRequirements || []).filter((item) => item.application_id === selected.id)
     : [];
+  const selectedConversation = selected
+    ? (data.messagingInbox || []).find((item) => item.conversation_id === selected.conversation_id) || null
+    : null;
+  const onboardingStarted = selected?.answers?.onboarding?.customer_messaging_started === true;
   const requiredDefinitions = selectedDefinitions.filter((item) => item.requirement_level === "required");
   const unresolvedRequired = requiredDefinitions.filter((item) => selectedValueMap.get(item.field_key)?.verification_status !== "verified");
   const visibleDefinitions = selectedDefinitions.filter((item) => {
@@ -268,6 +272,27 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
       setInstruction("");
       setInstructionLevel("optional");
       onToast("Onboarding instruction added — it has not been sent to the shop");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startGuidedOnboarding = async () => {
+    if (!selected || !selectedConversation || busy || onboardingStarted) return;
+    const confirmed = window.confirm(
+      `Start live guided onboarding with ${applicationName(selected)}?\n\nThis sends one approval message, releases only this conversation to automation, and lets the AI collect one onboarding item at a time. AI-captured answers stay pending staff review and cannot activate the shop.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await api.actions.startPartnerGuidedOnboarding({
+        applicationId: selected.id,
+        expectedApplicationVersion: selected.version,
+        expectedConversationVersion: selectedConversation.version,
+      });
+      onToast("Guided onboarding started — the approval message is safely queued");
     } catch (error) {
       onError(error);
     } finally {
@@ -458,7 +483,11 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
                   })}
                 </section>
               )}
-              <div className="partner-safety-note">Approval prepares a visible guided-onboarding checklist only. It does not message the shop, activate it, publish a catalogue, or enable restricted products.</div>
+              <div className="partner-safety-note">
+                {selected.status === "approved"
+                  ? "Approval is complete. Starting guided onboarding is a separate confirmed action: it sends one message and enables AI only for this shop. AI-captured answers remain pending staff review and cannot activate the shop."
+                  : "Approval prepares a visible guided-onboarding checklist. It does not message the shop, activate it, publish a catalogue, or enable restricted products until staff separately starts guided onboarding."}
+              </div>
 
               <label className="partner-review-note">
                 <span>Private review note</span>
@@ -467,10 +496,12 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
 
               <div className="partner-actions">
                 <button type="button" className="ghost-button" onClick={() => onNavigate("messaging")}>Open messaging</button>
-                <button type="button" className="small-button" disabled={busy || !note.trim()} onClick={() => changeStatus("reviewing")}>Mark reviewing</button>
-                <button type="button" className="small-button danger-button" disabled={busy || !note.trim()} onClick={() => changeStatus("rejected")}>Decline</button>
-                <button type="button" className="primary-button" disabled={busy || !note.trim() || (selected.application_type === "shop" && unresolvedRequired.length > 0)} onClick={() => changeStatus("approved")}>Approve & prepare onboarding</button>
+                {["submitted", "reviewing"].includes(selected.status) && <button type="button" className="small-button" disabled={busy || !note.trim()} onClick={() => changeStatus("reviewing")}>Mark reviewing</button>}
+                {["submitted", "reviewing"].includes(selected.status) && <button type="button" className="small-button danger-button" disabled={busy || !note.trim()} onClick={() => changeStatus("rejected")}>Decline</button>}
+                {["submitted", "reviewing"].includes(selected.status) && <button type="button" className="primary-button" disabled={busy || !note.trim() || (selected.application_type === "shop" && unresolvedRequired.length > 0)} onClick={() => changeStatus("approved")}>Approve & prepare onboarding</button>}
+                {selected.status === "approved" && !onboardingStarted && <button type="button" className="primary-button automation-button" disabled={busy || !selectedConversation} onClick={startGuidedOnboarding}>Start guided onboarding</button>}
               </div>
+              {selected.status === "approved" && !onboardingStarted && !selectedConversation && <div className="partner-warning">This application has no visible messaging conversation yet. Refresh or open Messaging before starting onboarding.</div>}
 
               {selectedRequirements.length > 0 && (
                 <section className="partner-onboarding-workspace">
@@ -480,7 +511,7 @@ export default function PartnerApplications({ data, api, onError, onToast, onNav
                       <h3>Procedure checklist</h3>
                       <small>{selectedRequirements.filter((item) => item.requirement_level === "required" && !["verified","completed","not_applicable"].includes(item.status)).length} required item(s) remaining. Optional items never block progress.</small>
                     </div>
-                    <span className="tag application-reviewing">No customer message started</span>
+                    <span className={`tag ${onboardingStarted ? "application-approved" : "application-reviewing"}`}>{onboardingStarted ? "Guided onboarding live" : "No customer message started"}</span>
                   </header>
                   {selectedRequirements.map((item) => (
                     <OnboardingRequirementRow key={item.id} item={item} api={api} onError={onError} onToast={onToast} />

@@ -7,6 +7,7 @@ import CatalogueManager from "../components/CatalogueManager";
 import DriverBoard from "../components/DriverBoard";
 import FocusStrip from "../components/FocusStrip";
 import FloatingChatDock from "../components/FloatingChatDock";
+import LaunchQueue from "../components/LaunchQueue";
 import MessagingInbox from "../components/MessagingInbox";
 import OperationsMap from "../components/OperationsMap";
 import PartnerApplications from "../components/PartnerApplications";
@@ -28,6 +29,7 @@ const EMPTY_DATA = {
   messagingInbox: [],
   messagingDirectory: [],
   messagingHealth: null,
+  launchQueue: [],
   partnerApplications: [],
   partnerCatalogueSubmissions: [],
   partnerApplicationFiles: [],
@@ -198,6 +200,10 @@ export default function DashboardPage() {
   const helpCount = data.openQueries.length;
   const locationCount = data.orderPins.filter((pin) => pin.location_quality !== "confirmed").length;
   const messagingCount = data.messagingInbox.filter((conversation) => conversation.requires_attention).length;
+  const launchQueueCount = data.launchQueue.filter((entry) =>
+    (entry.entry_type === "customer_waitlist" && entry.status === "active")
+    || (entry.entry_type === "partner_company" && ["submitted", "needs_review"].includes(entry.status)),
+  ).length;
   const applicationsCount = data.partnerApplications.filter((application) => ["submitted", "reviewing"].includes(application.status)).length;
   const automationCount = Number(data.health?.automation_backlog || 0);
 
@@ -233,6 +239,7 @@ export default function DashboardPage() {
         helpCount={helpCount}
         locationCount={locationCount}
         messagingCount={messagingCount}
+        launchQueueCount={launchQueueCount}
         applicationsCount={applicationsCount}
         automationCount={automationCount}
         activeTab={activeTab}
@@ -297,6 +304,8 @@ export default function DashboardPage() {
         <CatalogueManager onError={handleError} onToast={showToast} />
       ) : activeTab === "messaging" ? (
         <MessagingInbox {...childProps} />
+      ) : activeTab === "launch_queue" ? (
+        <LaunchQueue {...childProps} />
       ) : activeTab === "applications" ? (
         <PartnerApplications {...childProps} />
       ) : activeTab === "automation" ? (
