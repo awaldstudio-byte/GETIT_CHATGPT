@@ -183,6 +183,35 @@ VISION_FIELDS_BY_PAGE = {
     5: ["applicant_name", "applicant_capacity", "applicant_signature", "signature_date"],
 }
 
+VISION_REQUIRED_BY_PAGE = {
+    1: ["shop_trading_name", "authorised_representative", "primary_mobile", "shop_address"],
+    2: ["business_types", "products_services_description", "retail_acknowledgements"],
+    3: ["trading_hours"],
+    5: ["applicant_name", "applicant_capacity", "applicant_signature", "signature_date"],
+}
+
+VISION_PAGE_GUIDANCE = {
+    1: (
+        "Read the handwritten identity/contact block carefully, line by line. Map the trading or shop name, "
+        "owner or authorised representative, mobile/WhatsApp number, and full operating address to their exact keys. "
+        "A label may be printed faintly above or beside handwriting. Preserve spelling and digits; never guess an unreadable value."
+    ),
+    2: (
+        "Inspect every marked checkbox as well as handwriting. For retail_acknowledgements return a JSON array containing "
+        "only the visibly marked statements, even when fewer than all statements are marked."
+    ),
+    3: (
+        "Read each weekday row separately. Preserve unclear or crossed-out times in the evidence instead of silently choosing one."
+    ),
+    4: (
+        "Catalogue choices are optional. Return only visibly selected formats, cadence, or supply choices; an entirely blank page is valid."
+    ),
+    5: (
+        "Inspect the agreement block closely. A visible handwritten signature, initials, or signature mark counts as "
+        "applicant_signature with value_text 'Signature present'; do not try to identify a person from the signature."
+    ),
+}
+
 
 def is_checked(value: Any) -> bool:
     return str(value or "").strip().lower() not in {"", "/off", "off", "false", "0", "none"}
@@ -192,15 +221,31 @@ def clean_text(value: Any) -> str:
     return " ".join(str(value or "").replace("\x00", " ").split()).strip()
 
 
+def normalize_za_mobile(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 9 and digits[0] in "678":
+        return f"+27{digits}"
+    if len(digits) == 10 and digits.startswith("0"):
+        return f"+27{digits[1:]}"
+    if len(digits) == 11 and digits.startswith("27"):
+        return f"+{digits}"
+    return value
+
+
 def field_candidate(key: str, *, value_text: str | None = None, value_json: Any = None,
                     confidence: float, method: str, file_id: str | None,
                     page: int | None = None, evidence: str | None = None) -> dict:
     label, requirement = FIELD_DEFINITIONS[key]
+    normalized_text = clean_text(value_text) or None
+    if key == "primary_mobile" and normalized_text:
+        normalized_text = normalize_za_mobile(normalized_text)
+    if key in SIMPLE_FIELDS:
+        value_json = None
     return {
         "field_key": key,
         "field_label": label,
         "requirement_level": requirement,
-        "value_text": value_text,
+        "value_text": normalized_text,
         "value_json": None if value_json in (None, "", [], {}) else value_json,
         "confidence": round(max(0.0, min(1.0, float(confidence))), 4),
         "extraction_method": method,
@@ -289,7 +334,8 @@ def extract_image_with_vision(document: bytes, mime_type: str, file_id: str | No
         "do not mark optional blanks as missing, and ignore the internal-only Getit representative and activation fields. "
         "For grouped answers use JSON arrays or objects. Evidence must be a short visual description, not invented text. "
     ) + (f"This is page {page_hint} of 5. " if page_hint else "") + (
-        f"Allowed field keys for this page only: {allowed}. File hint: {file_name or 'none'}."
+        f"Allowed field keys for this page only: {allowed}. File hint: {file_name or 'none'}. "
+        f"{VISION_PAGE_GUIDANCE.get(page_hint, '')}"
     )
     vision_schema = json.loads(json.dumps(VISION_SCHEMA))
     vision_schema["properties"]["fields"]["items"]["properties"]["field_key"]["enum"] = allowed_keys
@@ -346,6 +392,31 @@ def extract_image_with_vision(document: bytes, mime_type: str, file_id: str | No
             raise HTTPException(status_code=503, detail="local document vision unavailable") from error
     except (urllib.error.URLError, TimeoutError) as error:
         raise HTTPException(status_code=503, detail="local document vision unavailable") from error
+
+    # Handwritten phone photos can be faint or skewed. A deterministic second
+    # inspection is cheaper and safer than letting a missing first-pass field
+    # silently become "not provided". It is still constrained to visible data
+    # and is allowed to return an empty list when the applicant left it blank.
+    if page_hint in VISION_REQUIRED_BY_PAGE:
+        first_keys = {
+            item.get("field_key") for item in parsed.get("fields", [])
+            if isinstance(item, dict) and item.get("field_key") in allowed_keys
+        }
+        missing_keys = [key for key in VISION_REQUIRED_BY_PAGE[page_hint] if key not in first_keys]
+        if missing_keys:
+            recheck_prompt = (
+                prompt
+                + " Re-inspect the photographed page at full visual detail. The first inspection did not find these keys: "
+                + ", ".join(missing_keys)
+                + ". Return only fields among those keys that are visibly filled, checked, or signed. "
+                  "Do not infer, complete, or guess any missing value. An empty fields array is correct for true blanks. "
+                  "Return one strict JSON object with page_number and fields, with no Markdown."
+            )
+            try:
+                rechecked = request_vision(vision_schema, recheck_prompt, 1800)
+                parsed["fields"].extend(rechecked.get("fields", []))
+            except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
+                pass
 
     page = page_hint or parsed.get("page_number")
     results = []
@@ -426,6 +497,7 @@ def health() -> dict:
         "voice_model": os.getenv("VOICE_MODEL", "base"),
         "document_vision_model": DOCUMENT_VISION_MODEL,
         "partner_form_extraction": True,
+        "partner_form_extraction_version": 2,
     }
 
 

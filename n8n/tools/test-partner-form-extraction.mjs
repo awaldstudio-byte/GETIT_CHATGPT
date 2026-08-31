@@ -21,6 +21,10 @@ check('source function verifies the service credential', /verify_messaging_servi
 check('source function downloads only archived allowlisted form media', /ALLOWED_MIMES/.test(sourceFunction) && /storage\.from\(bucket\)\.download/.test(sourceFunction));
 check('fillable PDFs use deterministic AcroForm extraction', /def extract_acroform/.test(worker) && /get_fields\(\)/.test(worker));
 check('photo extraction is constrained by page', /VISION_FIELDS_BY_PAGE/.test(worker) && /allowed_keys/.test(worker));
+check('faint required handwriting receives a bounded second inspection', /VISION_REQUIRED_BY_PAGE/.test(worker) && /missing_keys/.test(worker) && /Do not infer, complete, or guess/.test(worker));
+check('a visible signature mark is captured without identity inference', /Signature present/.test(worker) && /do not try to identify a person from the signature/.test(worker));
+check('South African mobile numbers are normalized deterministically', /def normalize_za_mobile/.test(worker) && /\+27\{digits\}/.test(worker));
+check('simple text fields discard model-generated metadata objects', /if key in SIMPLE_FIELDS:\s*\n\s*value_json = None/.test(worker));
 check('vision confidence cannot impersonate deterministic PDF confidence', /min\(0\.88/.test(worker));
 check('optional registration and VAT are encoded as optional', /'shop','registration_number','Registration number','shop_profile','optional'/.test(foundation) && /'shop','vat_number','VAT number','shop_profile','optional'/.test(foundation));
 check('approval checks required fields only', /d\.requirement_level='required'/.test(foundation));
