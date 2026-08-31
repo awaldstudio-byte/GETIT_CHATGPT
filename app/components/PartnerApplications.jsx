@@ -27,16 +27,29 @@ const sectionLabel = {
   agreement: "Agreement",
 };
 
+const fieldDisplayValue = (value) => {
+  if (value?.value_text) return value.value_text;
+  const structured = value?.value_json;
+  if (Array.isArray(structured)) return structured.join("; ");
+  if (Array.isArray(structured?.checked_boxes)) return structured.checked_boxes.join("; ");
+  if (structured && typeof structured === "object") {
+    return Object.entries(structured)
+      .map(([key, item]) => `${key.replaceAll("_", " ")}: ${Array.isArray(item) ? item.join(", ") : String(item)}`)
+      .join("; ");
+  }
+  return "";
+};
+
 function PartnerFieldReviewRow({ applicationId, definition, value, api, onError, onToast }) {
-  const originalText = value?.value_text || "";
+  const originalText = fieldDisplayValue(value);
   const [draft, setDraft] = useState(originalText);
   const [note, setNote] = useState(value?.staff_note || "");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setDraft(value?.value_text || "");
+    setDraft(fieldDisplayValue(value));
     setNote(value?.staff_note || "");
-  }, [value?.version, value?.value_text, value?.staff_note]);
+  }, [value?.version, value?.value_text, value?.value_json, value?.staff_note]);
 
   const save = async (verificationStatus) => {
     if (busy) return;
