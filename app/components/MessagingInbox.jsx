@@ -197,6 +197,30 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
     }
   };
 
+  const addToWaitlist = async () => {
+    if (!selected || busy) return;
+    const confirmed = window.confirm(
+      `Add ${selected.customer_name} to the Getit waiting list?\n\nThis is idempotent and will not send a WhatsApp message. Use it only when staff has confirmed that the customer means the Getit launch waiting list rather than a shopping or grocery list.`,
+    );
+    if (!confirmed) return;
+    const sourceMessageId = [...(details?.messages || [])].reverse()
+      .find((message) => message.direction === "inbound")?.id || null;
+    setBusy(true);
+    setMenuOpen(false);
+    try {
+      const result = await api.actions.addCustomerToWaitlist(
+        selected.conversation_id,
+        sourceMessageId,
+        "Confirmed by staff from the Control Centre chat menu",
+      );
+      onToast(result?.already_active ? "Already active on the waiting list — no message sent" : "Added to the waiting list — no message sent");
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const sendReply = async (event) => {
     event.preventDefault();
     const body = composer.trim();
@@ -365,6 +389,7 @@ export default function MessagingInbox({ data, api, onError, onToast, realtimeRe
                           {selected.mode !== "automation" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("automation"); }}>Enable AI</button>}
                           {selected.mode !== "paused" && <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); changeMode("paused"); }}>Pause replies</button>}
                           {selected.customer_phone && <button type="button" role="menuitem" onClick={copyCustomerNumber}>Copy WhatsApp number</button>}
+                          <button type="button" role="menuitem" onClick={addToWaitlist}>Add to waiting list — no message</button>
                           <button type="button" role="menuitem" className="danger" onClick={clearConversation}>Reset Getit memory & timeline</button>
                         </div>
                       )}
