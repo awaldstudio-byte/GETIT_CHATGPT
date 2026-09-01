@@ -10,6 +10,7 @@ import FloatingChatDock from "../components/FloatingChatDock";
 import LaunchQueue from "../components/LaunchQueue";
 import MessagingInbox from "../components/MessagingInbox";
 import OperationsMap from "../components/OperationsMap";
+import OperationsSupervisor from "../components/OperationsSupervisor";
 import PartnerApplications from "../components/PartnerApplications";
 import PaymentQueue from "../components/PaymentQueue";
 import SupportQueue from "../components/SupportQueue";
@@ -38,6 +39,7 @@ const EMPTY_DATA = {
   partnerApplicationExtractionJobs: [],
   partnerOnboardingRequirements: [],
   automationEvents: [],
+  supervisorRequests: [],
 };
 
 export default function DashboardPage() {
@@ -206,6 +208,7 @@ export default function DashboardPage() {
   ).length;
   const applicationsCount = data.partnerApplications.filter((application) => ["submitted", "reviewing"].includes(application.status)).length;
   const automationCount = Number(data.health?.automation_backlog || 0);
+  const supervisorCount = data.supervisorRequests.filter((request) => ["queued", "processing"].includes(request.status)).length;
 
   const childProps = useMemo(
     () => ({
@@ -242,6 +245,7 @@ export default function DashboardPage() {
         launchQueueCount={launchQueueCount}
         applicationsCount={applicationsCount}
         automationCount={automationCount}
+        supervisorCount={supervisorCount}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         refreshing={refreshing}
@@ -308,6 +312,8 @@ export default function DashboardPage() {
         <LaunchQueue {...childProps} />
       ) : activeTab === "applications" ? (
         <PartnerApplications {...childProps} />
+      ) : activeTab === "supervisor" ? (
+        <OperationsSupervisor {...childProps} />
       ) : activeTab === "automation" ? (
         <AutomationBacklog {...childProps} />
       ) : (

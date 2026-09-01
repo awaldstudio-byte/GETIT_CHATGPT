@@ -2474,6 +2474,67 @@ textarea { min-height: 84px; resize: vertical; }
 }
 
 /* Launch queue */
+.supervisor-page { display: grid; gap: 14px; }
+.supervisor-hero,
+.supervisor-results > header,
+.supervisor-brief > header,
+.supervisor-ask > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.supervisor-hero { padding: 2px 1px 5px; }
+.supervisor-hero h1,
+.supervisor-results h2,
+.supervisor-ask h2 { margin: 3px 0 5px; }
+.supervisor-hero p { max-width: 720px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.supervisor-mode { padding: 8px 11px; border-radius: 999px; color: #075ecf; background: #e4efff; font-size: 10px; font-weight: 900; white-space: nowrap; }
+.supervisor-safety { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 12px 14px; border: 1px solid #cfe0f4; border-radius: 13px; color: #36516f; background: #edf5ff; font-size: 11px; line-height: 1.5; }
+.supervisor-safety strong { color: #075ecf; }
+.supervisor-ask { padding: 18px; }
+.supervisor-quick-prompts { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 10px; }
+.supervisor-quick-prompts button { padding: 8px 10px; border: 1px solid #cbd9e8; border-radius: 999px; color: #36516f; background: #f7faff; font-size: 10px; font-weight: 800; }
+.supervisor-quick-prompts button:hover { border-color: #8db9ed; color: #075ecf; background: #edf5ff; }
+.supervisor-ask form { display: grid; gap: 8px; }
+.supervisor-ask textarea { min-height: 108px; }
+.supervisor-ask form > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.supervisor-ask form small,
+.supervisor-results > header small { color: var(--muted); font-size: 10px; }
+.supervisor-results { display: grid; gap: 10px; }
+.supervisor-results > header { align-items: end; padding: 4px 2px; }
+.supervisor-brief { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: var(--shadow); }
+.supervisor-brief h3 { max-width: 850px; margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
+.tag.supervisor-status.queued,
+.tag.supervisor-status.processing { color: #7a4e00; background: #fff2cf; }
+.tag.supervisor-status.completed { color: #0a6844; background: #dcfce7; }
+.tag.supervisor-status.failed { color: #8d2c32; background: #fee2e2; }
+.supervisor-progress,
+.supervisor-error { margin: 14px 0 0; padding: 10px 12px; border-radius: 10px; color: #6a4a12; background: #fff4d8; font-size: 11px; }
+.supervisor-error { color: #8d2c32; background: #fee2e2; }
+.supervisor-brief-body { display: grid; gap: 14px; margin-top: 14px; }
+.supervisor-summary { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; padding: 12px; border-radius: 11px; background: #f5f8fc; }
+.supervisor-summary > span { padding: 4px 7px; border-radius: 999px; color: #36516f; background: #e5edf6; font-size: 8px; font-weight: 900; text-transform: uppercase; }
+.supervisor-summary p { margin: 0; color: #29435f; font-size: 12px; line-height: 1.55; }
+.supervisor-summary.high,
+.supervisor-summary.critical { background: #fff1f2; }
+.supervisor-summary.high > span,
+.supervisor-summary.critical > span { color: #8d2c32; background: #fee2e2; }
+.supervisor-section h4 { margin: 0 0 8px; font-size: 11px; }
+.supervisor-section ul { display: grid; gap: 5px; margin: 0; padding-left: 19px; color: #536274; font-size: 11px; line-height: 1.5; }
+.supervisor-actions { display: grid; gap: 7px; }
+.supervisor-actions > div { display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid #dce4ee; border-radius: 10px; background: #fafbfd; }
+.supervisor-actions > div > span { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; color: #fff; background: #0d2742; font-size: 9px; font-weight: 900; }
+.supervisor-actions p { margin: 0; color: #29435f; font-size: 11px; line-height: 1.45; }
+.supervisor-actions small { color: #7a4e00; font-size: 8px; font-weight: 850; white-space: nowrap; }
+.supervisor-limitations { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; color: #68788a; background: #f1f4f7; font-size: 9px; line-height: 1.45; }
+
+@media (max-width: 700px) {
+  .supervisor-hero,
+  .supervisor-results > header,
+  .supervisor-brief > header { align-items: stretch; flex-direction: column; }
+  .supervisor-mode { align-self: flex-start; }
+  .supervisor-safety { grid-template-columns: 1fr; }
+  .supervisor-actions > div { grid-template-columns: 24px 1fr; }
+  .supervisor-actions small { grid-column: 2; }
+}
+
+/* Launch queue */
 .launch-queue-page { display: grid; gap: 14px; }
 .launch-queue-hero,
 .launch-queue-toolbar,

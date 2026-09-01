@@ -18,6 +18,7 @@ export default function Topbar({
   launchQueueCount,
   applicationsCount,
   automationCount,
+  supervisorCount,
   activeTab,
   setActiveTab,
   refreshing,
@@ -33,6 +34,7 @@ export default function Topbar({
     ['messaging', 'Messaging', messagingCount],
     ['launch_queue', 'Launch queue', launchQueueCount],
     ['applications', 'Shop manager', applicationsCount],
+    ['supervisor', 'Supervisor', supervisorCount],
     ['automation', 'Automation', automationCount],
     ['help', 'Needs help', helpCount],
   ];
